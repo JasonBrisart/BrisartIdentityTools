@@ -1,4 +1,4 @@
-# BrisartIdentityTools
+# LabID
 
 Beta software for local-first identity verification experiments.
 
