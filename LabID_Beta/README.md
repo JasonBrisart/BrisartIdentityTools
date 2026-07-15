@@ -2,7 +2,7 @@
 
 Beta software for local-first identity verification experiments.
 
-BrisartIdentityTools is a Python-based, offline identity toolkit focused on local records, biometric-style verification templates, and readable verification reports.
+LabID is a Python-based, offline identity toolkit focused on local records, biometric-style verification templates, and readable verification reports.
 
 No external services.
 No cloud login.
@@ -38,7 +38,7 @@ This project currently performs controlled local image verification. It does not
 ## Repository Layout
 
 ```text
-BrisartIdentityTools/
+LabID/
     app.py
     README.md
     config/
