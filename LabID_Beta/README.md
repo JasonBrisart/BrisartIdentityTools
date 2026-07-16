@@ -1,4 +1,4 @@
-# BrisartIdentityTools
+# What This Is
 
 Beta software for local-first identity verification experiments.
 
