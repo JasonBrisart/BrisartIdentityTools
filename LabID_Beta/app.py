@@ -1,5 +1,4 @@
 import argparse
-import getpass
 import json
 import sys
 
@@ -9,6 +8,7 @@ from config.settings import (
     APP_NAME,
     APP_VERSION,
     DEFAULT_THRESHOLD,
+    ensure_data_dirs,
 )
 from identity.identity_store import (
     list_identities,
@@ -28,17 +28,6 @@ def print_json(data: dict) -> None:
     )
 
 
-def request_vault_password(args):
-    vault_path = getattr(args, "vault", None)
-
-    if not vault_path:
-        return None
-
-    return getpass.getpass(
-        "IdentityVault password: "
-    )
-
-
 def command_make_samples(args) -> None:
     written = generate_samples()
 
@@ -49,83 +38,38 @@ def command_make_samples(args) -> None:
 
 
 def command_enroll(args) -> None:
-    vault_password = request_vault_password(args)
-
     result = enroll_identity(
         identity_id=args.identity_id,
         display_name=args.display_name,
         image_path=args.image_path,
         threshold=args.threshold,
-        vault_path=args.vault,
-        vault_password=vault_password,
     )
 
     identity = result["identity"]
     template = result["template"]
 
     print("Enrollment complete.")
-    print(
-        f"Identity ID: "
-        f"{identity['identity_id']}"
-    )
-    print(
-        f"Display Name: "
-        f"{identity['display_name']}"
-    )
-    print(
-        f"Template Location: "
-        f"{identity['template_file']}"
-    )
-    print(
-        f"Template SHA256: "
-        f"{template['template_sha256']}"
-    )
-    print(
-        f"Default Threshold: "
-        f"{identity['default_threshold']}"
-    )
-    print(
-        f"Storage Mode: "
-        f"{identity['storage_mode']}"
-    )
-    print(
-        f"Enrollment ID: "
-        f"{identity['enrollment_id']}"
-    )
+    print(f"Identity ID: {identity['identity_id']}")
+    print(f"Display Name: {identity['display_name']}")
+    print(f"Template Location: {identity['template_file']}")
+    print(f"Template SHA256: {template['template_sha256']}")
+    print(f"Default Threshold: {identity['default_threshold']}")
+    print(f"Storage Mode: {identity['storage_mode']}")
 
 
 def command_verify(args) -> None:
-    vault_password = request_vault_password(args)
-
     report = verify_identity(
         identity_id=args.identity_id,
         image_path=args.image_path,
         threshold=args.threshold,
-        vault_path=args.vault,
-        vault_password=vault_password,
     )
 
     print("Verification complete.")
-    print(
-        f"Identity ID: "
-        f"{report['identity_id']}"
-    )
-    print(
-        f"Result: "
-        f"{report['result']}"
-    )
-    print(
-        f"Similarity Score: "
-        f"{report['similarity_score']}"
-    )
-    print(
-        f"Threshold: "
-        f"{report['threshold']}"
-    )
-    print(
-        f"Report File: "
-        f"{report['report_file']}"
-    )
+    print(f"Identity ID: {report['identity_id']}")
+    print(f"Result: {report['result']}")
+    print(f"Similarity Score: {report['similarity_score']}")
+    print(f"Threshold: {report['threshold']}")
+    print(f"Report File: {report['report_file']}")
 
 
 def command_inspect(args) -> None:
@@ -138,11 +82,7 @@ def command_list(args) -> None:
     records = list_identities()
 
     if not records:
-        print("No plaintext local identities found.")
-        print(
-            "Vault-backed identities are listed through "
-            "IdentityVault."
-        )
+        print("No local identities found.")
         return
 
     for record in records:
@@ -151,17 +91,6 @@ def command_list(args) -> None:
             f"{record.get('display_name')} | "
             f"{record.get('status')}"
         )
-
-
-def add_vault_argument(parser) -> None:
-    parser.add_argument(
-        "--vault",
-        default=None,
-        help=(
-            "Optional IdentityVault JSON file. "
-            "The password will be requested securely."
-        ),
-    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -201,7 +130,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_THRESHOLD,
     )
-    add_vault_argument(enroll_parser)
     enroll_parser.set_defaults(
         func=command_enroll
     )
@@ -220,7 +148,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
     )
-    add_vault_argument(verify_parser)
     verify_parser.set_defaults(
         func=command_verify
     )
@@ -228,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser = subparsers.add_parser(
         "inspect",
         help=(
-            "Print a plaintext local identity "
+            "Print a local identity "
             "record as JSON."
         ),
     )
@@ -239,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser(
         "list",
-        help="List plaintext local identities.",
+        help="List local identities.",
     )
     list_parser.set_defaults(
         func=command_list
@@ -250,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     ensure_data_dirs()
+
     parser = build_parser()
     args = parser.parse_args()
 

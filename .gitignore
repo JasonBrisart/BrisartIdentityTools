@@ -1,2 +1,10 @@
-/PROJECT_CONTEXT_EXPORTS
+PROJECT_CONTEXT_EXPORTS/
+__pycache__/
 *.pyc
+
+data/
+*.tmp
+
+sample_enroll.pgm
+sample_verify_close.pgm
+sample_verify_far.pgm

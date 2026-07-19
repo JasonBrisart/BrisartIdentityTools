@@ -1,13 +1,22 @@
 import json
 
-from IdentityVault_beta.config.settings import SUPPORTED_RECORD_KINDS
-from IdentityVault_beta.core.ids import new_record_id, safe_label
-from IdentityVault_beta.core.time_tools import utc_now
+from IdentityVault_beta.config.settings import (
+    SUPPORTED_RECORD_KINDS,
+)
+from IdentityVault_beta.core.ids import (
+    new_record_id,
+    safe_label,
+)
+from IdentityVault_beta.core.time_tools import (
+    utc_now,
+)
 
 
 def validate_kind(kind: str) -> str:
     if not isinstance(kind, str):
-        raise ValueError("record kind must be a string.")
+        raise ValueError(
+            "record kind must be a string."
+        )
 
     cleaned = kind.strip().lower()
 
@@ -22,7 +31,9 @@ def validate_kind(kind: str) -> str:
 
 def validate_value(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("record value must be a string.")
+        raise ValueError(
+            "record value must be a string."
+        )
 
     return value
 
@@ -32,7 +43,9 @@ def validate_metadata(metadata) -> dict:
         return {}
 
     if not isinstance(metadata, dict):
-        raise ValueError("record metadata must be an object.")
+        raise ValueError(
+            "record metadata must be an object."
+        )
 
     return dict(metadata)
 
@@ -48,14 +61,22 @@ def build_plain_payload(
         "kind": validate_kind(kind),
         "label": safe_label(label),
         "value": validate_value(value),
-        "notes": notes if isinstance(notes, str) else str(notes),
+        "notes": (
+            notes
+            if isinstance(notes, str)
+            else str(notes)
+        ),
         "metadata": validate_metadata(metadata),
     }
 
 
-def payload_to_bytes(payload: dict) -> bytes:
+def payload_to_bytes(
+    payload: dict,
+) -> bytes:
     if not isinstance(payload, dict):
-        raise ValueError("payload must be an object.")
+        raise ValueError(
+            "payload must be an object."
+        )
 
     return json.dumps(
         payload,
@@ -65,14 +86,22 @@ def payload_to_bytes(payload: dict) -> bytes:
     ).encode("utf-8")
 
 
-def payload_from_bytes(data: bytes) -> dict:
+def payload_from_bytes(
+    data: bytes,
+) -> dict:
     if not isinstance(data, bytes):
-        raise ValueError("payload data must be bytes.")
+        raise ValueError(
+            "payload data must be bytes."
+        )
 
-    payload = json.loads(data.decode("utf-8"))
+    payload = json.loads(
+        data.decode("utf-8")
+    )
 
     if not isinstance(payload, dict):
-        raise ValueError("decrypted payload must contain an object.")
+        raise ValueError(
+            "payload must contain an object."
+        )
 
     return payload
 
@@ -90,5 +119,4 @@ def build_record_shell(
         "label": safe_label(label),
         "created_at": now,
         "updated_at": now,
-        "encrypted": {},
     }

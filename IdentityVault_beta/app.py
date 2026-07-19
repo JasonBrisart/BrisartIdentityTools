@@ -1,9 +1,7 @@
 import argparse
-import getpass
 import json
 import sys
 from pathlib import Path
-
 
 if __package__ in (None, ""):
     repository_root = Path(__file__).resolve().parent.parent
@@ -12,7 +10,6 @@ if __package__ in (None, ""):
     if repository_root_string not in sys.path:
         sys.path.insert(0, repository_root_string)
 
-
 from IdentityVault_beta.config.settings import (
     DEFAULT_VAULT_PATH,
     SUPPORTED_RECORD_KINDS,
@@ -20,18 +17,6 @@ from IdentityVault_beta.config.settings import (
 from IdentityVault_beta.vault.vault_service import (
     IdentityVaultService,
 )
-
-
-def request_password(
-    args,
-    prompt: str = "Vault password: ",
-) -> str:
-    supplied = getattr(args, "password", None)
-
-    if supplied:
-        return supplied
-
-    return getpass.getpass(prompt)
 
 
 def print_json(data) -> None:
@@ -46,48 +31,33 @@ def print_json(data) -> None:
 
 
 def command_init(args) -> None:
-    password = request_password(
-        args,
-        "New vault password: ",
-    )
-
-    if not args.password:
-        confirmation = getpass.getpass(
-            "Confirm vault password: "
-        )
-
-        if password != confirmation:
-            raise ValueError(
-                "vault passwords do not match."
-            )
-
     service = IdentityVaultService(args.vault)
 
     service.initialize(
-        password=password,
         overwrite=args.overwrite,
     )
 
-    print(f"Vault initialized: {args.vault}")
+    print(f"Plaintext vault initialized: {args.vault}")
 
 
 def command_add(args) -> None:
-    password = request_password(args)
     service = IdentityVaultService(args.vault)
 
     value = args.value
 
     if value is None:
-        value = getpass.getpass("Record value: ")
+        raise ValueError(
+            "plaintext mode requires --value."
+        )
 
     record = service.add_record(
-        password=password,
         kind=args.kind,
         label=args.label,
         value=value,
         notes=args.notes or "",
         metadata={
             "source": "identity_vault_cli",
+            "storage_mode": "plaintext_json_beta",
         },
     )
 
@@ -98,11 +68,9 @@ def command_add(args) -> None:
 
 
 def command_get(args) -> None:
-    password = request_password(args)
     service = IdentityVaultService(args.vault)
 
     payload = service.get_record(
-        password=password,
         record_id=args.record_id,
     )
 
@@ -111,6 +79,7 @@ def command_get(args) -> None:
 
 def command_list(args) -> None:
     service = IdentityVaultService(args.vault)
+
     records = service.list_records()
 
     if not records:
@@ -122,16 +91,15 @@ def command_list(args) -> None:
             f"{record['record_id']} | "
             f"{record['kind']} | "
             f"{record['label']} | "
-            f"{record['updated_at']}"
+            f"{record['updated_at']} | "
+            f"{record.get('storage_mode')}"
         )
 
 
 def command_delete(args) -> None:
-    password = request_password(args)
     service = IdentityVaultService(args.vault)
 
     record = service.delete_record(
-        password=password,
         record_id=args.record_id,
     )
 
@@ -140,10 +108,8 @@ def command_delete(args) -> None:
 
 
 def command_verify(args) -> None:
-    password = request_password(args)
     service = IdentityVaultService(args.vault)
-
-    result = service.verify(password=password)
+    result = service.verify()
     print_json(result)
 
 
@@ -152,43 +118,12 @@ def command_manifest(args) -> None:
     print_json(service.manifest())
 
 
-def command_change_password(args) -> None:
-    old_password = request_password(
-        args,
-        "Current vault password: ",
-    )
-
-    new_password = args.new_password
-
-    if new_password is None:
-        new_password = getpass.getpass(
-            "New vault password: "
-        )
-        confirmation = getpass.getpass(
-            "Confirm new vault password: "
-        )
-
-        if new_password != confirmation:
-            raise ValueError(
-                "new passwords do not match."
-            )
-
-    service = IdentityVaultService(args.vault)
-
-    result = service.change_password(
-        old_password=old_password,
-        new_password=new_password,
-    )
-
-    print_json(result)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="app.py",
         description=(
             "IdentityVault beta dependency-free "
-            "encrypted local identity vault"
+            "plaintext local identity record store"
         ),
     )
 
@@ -205,12 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_parser = subparsers.add_parser(
         "init",
-        help="Initialize a new vault.",
-    )
-    init_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
+        help="Initialize a new plaintext vault.",
     )
     init_parser.add_argument(
         "--overwrite",
@@ -220,12 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_parser = subparsers.add_parser(
         "add",
-        help="Add an encrypted record.",
-    )
-    add_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
+        help="Add a plaintext record.",
     )
     add_parser.add_argument(
         "--kind",
@@ -238,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_parser.add_argument(
         "--value",
-        default=None,
+        required=True,
     )
     add_parser.add_argument(
         "--notes",
@@ -248,19 +173,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     get_parser = subparsers.add_parser(
         "get",
-        help="Decrypt and print a record.",
+        help="Print a plaintext record.",
     )
     get_parser.add_argument("record_id")
-    get_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
     get_parser.set_defaults(func=command_get)
 
     list_parser = subparsers.add_parser(
         "list",
-        help="List non-secret record metadata.",
+        help="List record metadata.",
     )
     list_parser.set_defaults(func=command_list)
 
@@ -269,50 +189,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete a record.",
     )
     delete_parser.add_argument("record_id")
-    delete_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
     delete_parser.set_defaults(func=command_delete)
 
     verify_parser = subparsers.add_parser(
         "verify",
-        help=(
-            "Verify the vault password and "
-            "record authentication tags."
-        ),
-    )
-    verify_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
+        help="Verify plaintext vault structure.",
     )
     verify_parser.set_defaults(func=command_verify)
 
     manifest_parser = subparsers.add_parser(
         "manifest",
-        help="Export a non-secret vault manifest.",
+        help="Export a vault manifest.",
     )
     manifest_parser.set_defaults(func=command_manifest)
-
-    change_parser = subparsers.add_parser(
-        "change-password",
-        help="Re-encrypt the vault with a new password.",
-    )
-    change_parser.add_argument(
-        "--password",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    change_parser.add_argument(
-        "--new-password",
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    change_parser.set_defaults(
-        func=command_change_password
-    )
 
     return parser
 

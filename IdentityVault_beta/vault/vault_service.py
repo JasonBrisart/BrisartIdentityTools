@@ -3,25 +3,11 @@ from pathlib import Path
 from IdentityVault_beta.config.settings import (
     APP_NAME,
     APP_VERSION,
-    PBKDF2_ALGORITHM,
-    PBKDF2_ITERATIONS,
 )
-from IdentityVault_beta.core.crypto import (
-    VaultCryptoError,
-    decrypt_payload,
-    derive_master_key,
-    encrypt_payload,
-    password_check_value,
-    random_salt,
-    verify_password_check,
-)
-from IdentityVault_beta.core.encoding import b64d, b64e
 from IdentityVault_beta.core.time_tools import utc_now
 from IdentityVault_beta.records.record_model import (
     build_plain_payload,
     build_record_shell,
-    payload_from_bytes,
-    payload_to_bytes,
     validate_kind,
 )
 from IdentityVault_beta.reports.audit_log import append_audit
@@ -37,7 +23,6 @@ class IdentityVaultService:
 
     def initialize(
         self,
-        password: str,
         overwrite: bool = False,
     ) -> dict:
         path = Path(self.vault_path)
@@ -47,13 +32,6 @@ class IdentityVaultService:
                 f"vault already exists: {path}"
             )
 
-        salt = random_salt()
-        master_key = derive_master_key(
-            password=password,
-            salt=salt,
-            iterations=PBKDF2_ITERATIONS,
-        )
-
         now = utc_now()
 
         data = {
@@ -62,13 +40,7 @@ class IdentityVaultService:
             "format_version": 1,
             "created_at": now,
             "updated_at": now,
-            "kdf": {
-                "name": "pbkdf2_hmac",
-                "hash": PBKDF2_ALGORITHM,
-                "iterations": PBKDF2_ITERATIONS,
-                "salt": b64e(salt),
-            },
-            "password_check": password_check_value(master_key),
+            "storage_mode": "plaintext_json_beta",
             "records": {},
             "audit_log": [],
         }
@@ -78,6 +50,7 @@ class IdentityVaultService:
             "init_vault",
             {
                 "vault_path": self.vault_path,
+                "storage_mode": "plaintext_json_beta",
             },
         )
 
@@ -108,8 +81,6 @@ class IdentityVaultService:
             "app",
             "created_at",
             "updated_at",
-            "kdf",
-            "password_check",
             "records",
             "audit_log",
         }
@@ -118,7 +89,7 @@ class IdentityVaultService:
 
         if missing_fields:
             raise ValueError(
-                f"vault is missing required fields: "
+                "vault is missing required fields: "
                 f"{sorted(missing_fields)}"
             )
 
@@ -127,57 +98,15 @@ class IdentityVaultService:
                 "file is not an IdentityVault vault."
             )
 
-        if not isinstance(data.get("kdf"), dict):
-            raise ValueError("vault kdf must be an object.")
-
         if not isinstance(data.get("records"), dict):
-            raise ValueError("vault records must be an object.")
+            raise ValueError(
+                "vault records must be an object."
+            )
 
         if not isinstance(data.get("audit_log"), list):
-            raise ValueError("vault audit log must be a list.")
-
-    def master_key(
-        self,
-        data: dict,
-        password: str,
-    ) -> bytes:
-        self._validate_structure(data)
-
-        kdf = data["kdf"]
-
-        if kdf.get("name") != "pbkdf2_hmac":
-            raise VaultCryptoError(
-                f"unsupported KDF: {kdf.get('name')}"
+            raise ValueError(
+                "vault audit log must be a list."
             )
-
-        if kdf.get("hash") != PBKDF2_ALGORITHM:
-            raise VaultCryptoError(
-                f"unsupported KDF hash: {kdf.get('hash')}"
-            )
-
-        try:
-            salt = b64d(kdf["salt"])
-            iterations = int(kdf["iterations"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise VaultCryptoError(
-                "vault contains invalid KDF settings."
-            ) from exc
-
-        master_key = derive_master_key(
-            password=password,
-            salt=salt,
-            iterations=iterations,
-        )
-
-        if not verify_password_check(
-            master_key,
-            data["password_check"],
-        ):
-            raise PermissionError(
-                "wrong password or invalid vault."
-            )
-
-        return master_key
 
     def _find_record_in_data(
         self,
@@ -203,6 +132,7 @@ class IdentityVaultService:
         label: str,
     ):
         data = self.load()
+
         record = self._find_record_in_data(
             data=data,
             kind=kind,
@@ -212,17 +142,10 @@ class IdentityVaultService:
         if record is None:
             return None
 
-        return {
-            "record_id": record["record_id"],
-            "kind": record["kind"],
-            "label": record["label"],
-            "created_at": record["created_at"],
-            "updated_at": record["updated_at"],
-        }
+        return self._public_record(record)
 
     def add_record(
         self,
-        password: str,
         kind: str,
         label: str,
         value: str,
@@ -230,10 +153,6 @@ class IdentityVaultService:
         metadata=None,
     ) -> dict:
         data = self.load()
-        master_key = self.master_key(
-            data=data,
-            password=password,
-        )
 
         selected_kind = validate_kind(kind)
 
@@ -262,13 +181,8 @@ class IdentityVaultService:
             metadata=metadata,
         )
 
-        record["encrypted"] = encrypt_payload(
-            master_key=master_key,
-            record_id=record["record_id"],
-            kind=record["kind"],
-            label=record["label"],
-            plaintext=payload_to_bytes(payload),
-        )
+        record["payload"] = payload
+        record["storage_mode"] = "plaintext_json_beta"
 
         data["records"][record["record_id"]] = record
 
@@ -279,6 +193,7 @@ class IdentityVaultService:
                 "record_id": record["record_id"],
                 "kind": record["kind"],
                 "label": record["label"],
+                "storage_mode": "plaintext_json_beta",
             },
         )
 
@@ -288,7 +203,6 @@ class IdentityVaultService:
 
     def upsert_record(
         self,
-        password: str,
         kind: str,
         label: str,
         value: str,
@@ -296,7 +210,6 @@ class IdentityVaultService:
         metadata=None,
     ) -> dict:
         results = self.upsert_records(
-            password=password,
             items=[
                 {
                     "kind": kind,
@@ -312,7 +225,6 @@ class IdentityVaultService:
 
     def upsert_records(
         self,
-        password: str,
         items: list,
     ) -> list:
         if not isinstance(items, list) or not items:
@@ -321,11 +233,6 @@ class IdentityVaultService:
             )
 
         data = self.load()
-        master_key = self.master_key(
-            data=data,
-            password=password,
-        )
-
         updated_records = []
 
         for item in items:
@@ -364,13 +271,8 @@ class IdentityVaultService:
                 metadata=item.get("metadata"),
             )
 
-            record["encrypted"] = encrypt_payload(
-                master_key=master_key,
-                record_id=record["record_id"],
-                kind=record["kind"],
-                label=record["label"],
-                plaintext=payload_to_bytes(payload),
-            )
+            record["payload"] = payload
+            record["storage_mode"] = "plaintext_json_beta"
 
             data["records"][record["record_id"]] = record
 
@@ -381,6 +283,7 @@ class IdentityVaultService:
                     "record_id": record["record_id"],
                     "kind": record["kind"],
                     "label": record["label"],
+                    "storage_mode": "plaintext_json_beta",
                 },
             )
 
@@ -394,14 +297,9 @@ class IdentityVaultService:
 
     def get_record(
         self,
-        password: str,
         record_id: str,
     ) -> dict:
         data = self.load()
-        master_key = self.master_key(
-            data=data,
-            password=password,
-        )
 
         record = data["records"].get(record_id)
 
@@ -410,26 +308,23 @@ class IdentityVaultService:
                 f"record not found: {record_id}"
             )
 
-        plaintext = decrypt_payload(
-            master_key=master_key,
-            record_id=record["record_id"],
-            kind=record["kind"],
-            label=record["label"],
-            encrypted=record["encrypted"],
-        )
+        payload = record.get("payload")
 
-        payload = payload_from_bytes(plaintext)
+        if not isinstance(payload, dict):
+            raise ValueError(
+                "record payload is missing or invalid."
+            )
 
         if payload.get("kind") != record["kind"]:
-            raise VaultCryptoError(
-                "decrypted record kind does not match "
-                "the record envelope."
+            raise ValueError(
+                "record payload kind does not match "
+                "the record shell."
             )
 
         if payload.get("label") != record["label"]:
-            raise VaultCryptoError(
-                "decrypted record label does not match "
-                "the record envelope."
+            raise ValueError(
+                "record payload label does not match "
+                "the record shell."
             )
 
         return {
@@ -441,7 +336,6 @@ class IdentityVaultService:
 
     def get_record_by_label(
         self,
-        password: str,
         kind: str,
         label: str,
     ) -> dict:
@@ -457,7 +351,6 @@ class IdentityVaultService:
             )
 
         return self.get_record(
-            password=password,
             record_id=record["record_id"],
         )
 
@@ -480,15 +373,9 @@ class IdentityVaultService:
 
     def delete_record(
         self,
-        password: str,
         record_id: str,
     ) -> dict:
         data = self.load()
-
-        self.master_key(
-            data=data,
-            password=password,
-        )
 
         record = data["records"].pop(
             record_id,
@@ -514,38 +401,27 @@ class IdentityVaultService:
 
         return self._public_record(record)
 
-    def verify(
-        self,
-        password: str,
-    ) -> dict:
+    def verify(self) -> dict:
         data = self.load()
-        master_key = self.master_key(
-            data=data,
-            password=password,
-        )
-
         checked = 0
         failures = []
 
         for record in data["records"].values():
             try:
-                plaintext = decrypt_payload(
-                    master_key=master_key,
-                    record_id=record["record_id"],
-                    kind=record["kind"],
-                    label=record["label"],
-                    encrypted=record["encrypted"],
-                )
+                payload = record.get("payload")
 
-                payload = payload_from_bytes(plaintext)
+                if not isinstance(payload, dict):
+                    raise ValueError(
+                        "record payload is missing or invalid."
+                    )
 
                 if payload.get("kind") != record["kind"]:
-                    raise VaultCryptoError(
+                    raise ValueError(
                         "payload kind mismatch."
                     )
 
                 if payload.get("label") != record["label"]:
-                    raise VaultCryptoError(
+                    raise ValueError(
                         "payload label mismatch."
                     )
 
@@ -564,6 +440,7 @@ class IdentityVaultService:
             "checked_records": checked,
             "failed_records": failures,
             "result": "OK" if not failures else "FAILED",
+            "storage_mode": "plaintext_json_beta",
         }
 
     def manifest(self) -> dict:
@@ -575,79 +452,12 @@ class IdentityVaultService:
             "format_version": data.get("format_version"),
             "created_at": data.get("created_at"),
             "updated_at": data.get("updated_at"),
+            "storage_mode": data.get(
+                "storage_mode",
+                "plaintext_json_beta",
+            ),
             "record_count": len(data["records"]),
             "records": self.list_records(),
-        }
-
-    def change_password(
-        self,
-        old_password: str,
-        new_password: str,
-    ) -> dict:
-        if not new_password:
-            raise ValueError(
-                "new password cannot be empty."
-            )
-
-        data = self.load()
-        old_master_key = self.master_key(
-            data=data,
-            password=old_password,
-        )
-
-        plaintext_payloads = {}
-
-        for record_id, record in data["records"].items():
-            plaintext_payloads[record_id] = decrypt_payload(
-                master_key=old_master_key,
-                record_id=record["record_id"],
-                kind=record["kind"],
-                label=record["label"],
-                encrypted=record["encrypted"],
-            )
-
-        new_salt = random_salt()
-        new_master_key = derive_master_key(
-            password=new_password,
-            salt=new_salt,
-            iterations=PBKDF2_ITERATIONS,
-        )
-
-        data["kdf"] = {
-            "name": "pbkdf2_hmac",
-            "hash": PBKDF2_ALGORITHM,
-            "iterations": PBKDF2_ITERATIONS,
-            "salt": b64e(new_salt),
-        }
-        data["password_check"] = password_check_value(
-            new_master_key
-        )
-
-        for record_id, plaintext in plaintext_payloads.items():
-            record = data["records"][record_id]
-
-            record["encrypted"] = encrypt_payload(
-                master_key=new_master_key,
-                record_id=record["record_id"],
-                kind=record["kind"],
-                label=record["label"],
-                plaintext=plaintext,
-            )
-            record["updated_at"] = utc_now()
-
-        append_audit(
-            data,
-            "change_password",
-            {
-                "record_count": len(plaintext_payloads),
-            },
-        )
-
-        self.save(data)
-
-        return {
-            "result": "OK",
-            "record_count": len(plaintext_payloads),
         }
 
     @staticmethod
@@ -658,4 +468,8 @@ class IdentityVaultService:
             "label": record["label"],
             "created_at": record["created_at"],
             "updated_at": record["updated_at"],
+            "storage_mode": record.get(
+                "storage_mode",
+                "plaintext_json_beta",
+            ),
         }

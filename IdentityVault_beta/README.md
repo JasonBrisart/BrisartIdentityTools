@@ -1,46 +1,80 @@
 # IdentityVault
 
-Beta software for local encrypted identity storage.
+Plaintext local identity record storage for BrisartIdentityTools.
 
-IdentityVault is a dependency-free Python vault for storing local identity-related records, biometric template references, secrets, notes, and verification metadata.
+IdentityVault stores identity records, notes, metadata, biometric references,
+and related information as readable JSON files.
 
 No cloud services.
-No hosted provider.
+
+No external infrastructure.
+
 No third-party Python packages.
-No internet required.
+
+No encryption layer.
 
 Standard-library Python only.
 
 ---
 
-## What IdentityVault Covers
+## Purpose
 
-IdentityVault is intended to be the storage/security side of BrisartIdentityTools.
+IdentityVault is intended to provide:
 
-It is where identity-related data can be protected locally:
-
-- identity records
+- local identity records
 - biometric template references
-- local credentials
-- recovery notes
-- access tokens
-- certificate notes
-- encrypted metadata
-- vault manifests
-- audit logs
+- verification metadata
+- audit logging
+- manifests
+- local record management
 
-In the broader architecture:
+IdentityVault is currently a plaintext JSON storage system.
 
-```text
-IdentityCore  = verification / biometric processing
-IdentityVault = encrypted local storage
-```
+Encryption is not performed inside this repository.
+
+Future Brisart applications may instead rely on BSR2 from
+BrisartSecurityResearch when encryption is required.
 
 ---
 
-## Status
+## Current Storage Model
 
-Beta software.
+Records are stored directly inside JSON files.
+
+Example:
+
+```json
+{
+  "record_id": "vault_123456",
+  "kind": "identity",
+  "label": "Researcher One",
+  "payload": {
+    "value": "example record",
+    "notes": "",
+    "metadata": {}
+  }
+}
+```
+
+Files are human-readable and auditable.
+
+---
+
+## Storage Modes
+
+Current mode:
+
+```text
+plaintext_json_beta
+```
+
+No encryption.
+
+No password protection.
+
+No ciphertext.
+
+No cryptographic tags.
 
 ---
 
@@ -49,43 +83,47 @@ Beta software.
 Initialize a vault:
 
 ```bash
-python app.py init --vault data/vaults/main_vault.json
+python app.py init \
+--vault data/vaults/main_vault.json
 ```
 
-Add an encrypted record:
+Add a record:
 
 ```bash
-python app.py add --vault data/vaults/main_vault.json --kind secret --label "Lab Door Token" --value "example-token-value"
+python app.py add \
+--vault data/vaults/main_vault.json \
+--kind identity \
+--label "Researcher One" \
+--value "example"
 ```
 
 List records:
 
 ```bash
-python app.py list --vault data/vaults/main_vault.json
+python app.py list \
+--vault data/vaults/main_vault.json
 ```
 
 Read a record:
 
 ```bash
-python app.py get --vault data/vaults/main_vault.json RECORD_ID
+python app.py get \
+--vault data/vaults/main_vault.json \
+RECORD_ID
 ```
 
-Verify vault integrity:
+Verify structure:
 
 ```bash
-python app.py verify --vault data/vaults/main_vault.json
+python app.py verify \
+--vault data/vaults/main_vault.json
 ```
 
-Export a non-secret manifest:
+Export manifest:
 
 ```bash
-python app.py manifest --vault data/vaults/main_vault.json
-```
-
-Change the vault password:
-
-```bash
-python app.py change-password --vault data/vaults/main_vault.json
+python app.py manifest \
+--vault data/vaults/main_vault.json
 ```
 
 ---
@@ -93,45 +131,32 @@ python app.py change-password --vault data/vaults/main_vault.json
 ## Repository Layout
 
 ```text
-IdentityVault/
-    app.py
-    README.md
-    LICENSE
-    config/
-        settings.py
-    core/
-        crypto.py
-        encoding.py
-        ids.py
-        time_tools.py
-    vault/
-        vault_file.py
-        vault_service.py
-    records/
-        record_model.py
-    reports/
-        audit_log.py
-    data/
-        vaults/
+IdentityVault_beta/
+├── app.py
+├── config/
+│   └── settings.py
+├── core/
+│   ├── ids.py
+│   └── time_tools.py
+├── records/
+│   └── record_model.py
+├── reports/
+│   └── audit_log.py
+├── vault/
+│   ├── vault_file.py
+│   └── vault_service.py
+└── README.md
 ```
 
 ---
 
-## Design Notes
+## Status
 
-IdentityVault uses Python standard-library primitives:
+Beta software.
 
-- `hashlib.pbkdf2_hmac` for password-based key derivation
-- `hmac` for authentication tags
-- `hashlib.sha256` for deterministic keystream generation
-- `secrets` for salts, nonces, and record IDs
-- `json` for readable storage format
+IdentityVault currently focuses on readable
+local-first record storage.
 
-The vault file is human-inspectable as JSON, but record payloads are encrypted.
-
----
-
-## Beta Boundary
-
-This is beta software. It is designed for local-first development, offline testing, and BrisartIdentityTools integration work.
-
+Security functionality, when required,
+is expected to come from dedicated security tooling
+rather than being embedded directly into this repository.
