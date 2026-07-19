@@ -1,7 +1,7 @@
 from pathlib import Path
 
-APP_NAME = "BrisartIdentityTools"
-APP_VERSION = "0.2.0-beta"
+APP_NAME = "LabID"
+APP_VERSION = "0.4.0-beta"
 
 DATA_DIR = Path("data")
 IDENTITY_DIR = DATA_DIR / "identities"
@@ -15,6 +15,5 @@ DEFAULT_THRESHOLD = 0.94
 
 
 def ensure_data_dirs() -> None:
-    IDENTITY_DIR.mkdir(parents=True, exist_ok=True)
-    TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    for directory in (IDENTITY_DIR, TEMPLATE_DIR, REPORT_DIR):
+        directory.mkdir(parents=True, exist_ok=True)
