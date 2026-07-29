@@ -51,7 +51,6 @@ def create_identity(name: str, passphrase: str, voice_phrase: str) -> str:
         "face_hash": None,
         "fingerprint_hash": None,
     }
-
     out = IDENTITY_DIR / f"{identity_id}.identity"
     with open(out, "w", encoding="utf-8") as f:
         json.dump(profile, f, indent=4)

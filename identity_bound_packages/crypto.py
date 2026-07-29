@@ -1,14 +1,16 @@
 """
 crypto.py
 ---------
-Hashing + payload obfuscation helpers for the Identity-Bound Package
-BETA prototype.
+Hash helpers for the Identity-Bound Package (IBP) BETA prototype.
 
-*** RESEARCH / DEMO ONLY ***
-The XOR routine below is NOT encryption. It is reversible obfuscation
-used purely to demonstrate the package workflow. Do NOT use this to
-protect real secrets. A production version must use a reviewed
-cryptography library (e.g. AES-GCM + real key management).
+*** NO ENCRYPTION HERE - BY DESIGN ***
+This module intentionally provides ONLY hashing utilities. It does not
+provide any confidentiality/encryption mechanism. Encryption is expected
+to be handled by a dedicated security framework (e.g. BSR2 from
+BrisartSecurityResearch) when confidentiality is required.
+
+IBP's job is identity binding, authorization, audit trails, and custody
+tracking - not protecting the secrecy of the payload.
 """
 
 import hashlib
@@ -22,19 +24,3 @@ def hash_text(text: str) -> str:
 def hash_bytes(data: bytes) -> str:
     """Return the SHA-256 hex digest of raw bytes."""
     return hashlib.sha256(data).hexdigest()
-
-
-def derive_key(seed: str) -> bytes:
-    """Derive a 32-byte key from a seed string (demo only)."""
-    return hashlib.sha256(seed.encode()).digest()
-
-
-def xor_bytes(data: bytes, key: bytes) -> bytes:
-    """
-    Reversible XOR transform (obfuscation, NOT encryption).
-    Running it twice with the same key returns the original data.
-    """
-    out = bytearray()
-    for i, value in enumerate(data):
-        out.append(value ^ key[i % len(key)])
-    return bytes(out)

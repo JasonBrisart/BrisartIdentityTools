@@ -3,10 +3,11 @@ main.py
 -------
 Command-line entry point for the Identity-Bound Package (IBP) BETA.
 
-*** RESEARCH / DEMO ONLY - NOT SECURE ***
-The payload "encryption" is XOR obfuscation and the "signature" is a
-shared-secret hash. This is a workflow / architecture prototype, not a
-tool for protecting real confidential data.
+*** RESEARCH / DEMO ONLY ***
+This is a workflow / architecture prototype focused on identity-based
+authorization, integrity checking, custody tracking, and audit logging.
+It does NOT provide encryption. Use a dedicated security framework
+(e.g. BSR2 from BrisartSecurityResearch) if confidentiality is required.
 
 Usage:
     python main.py new-identity
@@ -56,6 +57,7 @@ def cmd_open():
     voice = input("Voice phrase: ")
 
     identity = IdentityProfile.load(identity_file)
+
     try:
         content = open_package(path, identity, passphrase, voice)
     except Exception as e:

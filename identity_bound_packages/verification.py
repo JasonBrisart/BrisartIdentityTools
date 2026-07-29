@@ -2,7 +2,6 @@
 verification.py
 ---------------
 Identity factor verification for the Identity-Bound Package BETA prototype.
-
 Currently active factors:  passphrase, voice phrase.
 Placeholder factors:       face, fingerprint (template-hash comparison).
 

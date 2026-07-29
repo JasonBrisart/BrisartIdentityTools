@@ -2,7 +2,6 @@
 custody.py
 ----------
 Chain-of-custody ledger for the Identity-Bound Package BETA prototype.
-
 Each event is hash-linked to the previous one (a tiny hash chain), so
 accidental edits or reordering can be detected by verify_chain().
 
