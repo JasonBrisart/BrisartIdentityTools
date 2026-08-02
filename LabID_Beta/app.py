@@ -43,6 +43,7 @@ def command_enroll(args) -> None:
         display_name=args.display_name,
         image_path=args.image_path,
         threshold=args.threshold,
+        overwrite=args.overwrite,
     )
 
     identity = result["identity"]
@@ -129,6 +130,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=float,
         default=DEFAULT_THRESHOLD,
+    )
+    enroll_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Re-enroll an identity that already exists, "
+            "replacing its stored template."
+        ),
     )
     enroll_parser.set_defaults(
         func=command_enroll

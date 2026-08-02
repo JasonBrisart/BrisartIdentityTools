@@ -1,0 +1,124 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unittest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run all test suites
+        run: python run_tests.py
+
+      - name: Verify the tests left no artifacts behind
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Tests modified the working tree:"
+            git status --porcelain
+            exit 1
+          fi
+
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+
+      - name: Lint
+        run: ruff check .
+
+  smoke:
+    name: CLI smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: LabID enroll and verify round trip
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py make-samples
+          python app.py enroll ci-user "CI User" data/samples/sample_enroll.pgm
+          python app.py verify ci-user data/samples/sample_verify_close.pgm
+          python app.py list
+          python app.py inspect ci-user
+
+      - name: Re-enrollment is refused without --overwrite
+        working-directory: LabID_Beta
+        run: |
+          if python app.py enroll ci-user "Someone Else" \
+              data/samples/sample_verify_far.pgm; then
+            echo "Expected re-enrollment to fail without --overwrite"
+            exit 1
+          fi
+          echo "Re-enrollment correctly refused."
+
+      - name: Re-enrollment succeeds with --overwrite
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py enroll ci-user "CI Renewed" \
+            data/samples/sample_verify_far.pgm --overwrite
+
+      - name: Invalid identity ids are rejected
+        working-directory: LabID_Beta
+        run: |
+          if python app.py enroll "ci/user" "Bad Id" \
+              data/samples/sample_enroll.pgm; then
+            echo "Expected an invalid identity id to be rejected"
+            exit 1
+          fi
+          echo "Invalid identity id correctly rejected."
+
+      - name: IdentityVault round trip
+        run: |
+          set -euo pipefail
+          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json init
+          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json add \
+            --kind identity --label "CI  Record" --value "ci-value"
+          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json list
+          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json verify
+
+      - name: Duplicate vault labels are refused
+        run: |
+          if python -m IdentityVault_beta.app --vault /tmp/ci_vault.json add \
+              --kind identity --label "CI  Record" --value "again"; then
+            echo "Expected a duplicate label to be rejected"
+            exit 1
+          fi
+          echo "Duplicate label correctly rejected."
+
+      - name: Identity-bound package demo
+        working-directory: identity_bound_packages
+        run: python main.py demo

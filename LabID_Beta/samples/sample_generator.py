@@ -1,3 +1,7 @@
+from pathlib import Path
+
+from config import settings
+from config.settings import ensure_data_dirs
 from core.pgm import write_pgm
 
 
@@ -40,9 +44,21 @@ def _far_pattern(width: int, height: int):
     return pixels
 
 
-def generate_samples() -> list:
+def generate_samples(output_dir=None) -> list:
+    """Write the demo PGM files into the data directory.
+
+    These used to be written to the current working directory, which put
+    generated artifacts wherever the CLI happened to be invoked from and made
+    them easy to commit by accident.
+    """
     width = 96
     height = 96
+
+    ensure_data_dirs()
+    target_dir = (
+        Path(output_dir) if output_dir else settings.SAMPLE_DIR
+    )
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     files = [
         ("sample_enroll.pgm", _face_like_pattern(width, height, shift=0, contrast=0)),
@@ -52,7 +68,8 @@ def generate_samples() -> list:
 
     written = []
     for file_name, pixels in files:
-        write_pgm(file_name, width, height, pixels)
-        written.append(file_name)
+        output_path = target_dir / file_name
+        write_pgm(str(output_path), width, height, pixels)
+        written.append(str(output_path))
 
     return written

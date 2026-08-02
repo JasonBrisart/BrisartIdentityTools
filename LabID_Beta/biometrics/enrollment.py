@@ -5,6 +5,8 @@ from identity.identity_record import (
     safe_identity_id,
 )
 from identity.identity_store import (
+    identity_exists,
+    load_identity,
     save_identity,
     save_template,
     template_path,
@@ -16,8 +18,20 @@ def enroll_identity(
     display_name: str,
     image_path: str,
     threshold: float = DEFAULT_THRESHOLD,
+    overwrite: bool = False,
 ) -> dict:
     safe_id = safe_identity_id(identity_id)
+
+    # Enrolling an existing id used to overwrite that identity's record and
+    # biometric template with no warning, which silently destroys the only copy
+    # of the enrolled template. Require an explicit opt-in instead.
+    if identity_exists(safe_id) and not overwrite:
+        existing = load_identity(safe_id)
+        raise FileExistsError(
+            f"identity already enrolled: {safe_id} "
+            f"(display name: {existing.get('display_name')}). "
+            "Pass overwrite=True / --overwrite to re-enroll."
+        )
 
     if not isinstance(display_name, str):
         raise ValueError(

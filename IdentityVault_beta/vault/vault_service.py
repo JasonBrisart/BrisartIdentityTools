@@ -5,6 +5,7 @@ from IdentityVault_beta.config.settings import (
     APP_VERSION,
 )
 from IdentityVault_beta.core.time_tools import utc_now
+from IdentityVault_beta.core.ids import safe_label
 from IdentityVault_beta.records.record_model import (
     build_plain_payload,
     build_record_shell,
@@ -115,7 +116,10 @@ class IdentityVaultService:
         label: str,
     ):
         selected_kind = validate_kind(kind)
-        selected_label = label.strip()
+        # Stored labels were normalized by safe_label(), which also collapses
+        # internal whitespace. Normalizing the query the same way is what makes
+        # duplicate detection and label lookups actually match.
+        selected_label = safe_label(label)
 
         for record in data["records"].values():
             if (
@@ -235,14 +239,38 @@ class IdentityVaultService:
         data = self.load()
         updated_records = []
 
+        # Validate every item up front. Without this pass, an invalid item at
+        # position N raises after items 0..N-1 have already been mutated into
+        # `data`, and because save() never runs the caller loses that work with
+        # no indication of how far the batch got.
+        prepared_items = []
+
         for item in items:
             if not isinstance(item, dict):
                 raise ValueError(
                     "each record item must be an object."
                 )
 
-            selected_kind = validate_kind(item["kind"])
-            selected_label = item["label"].strip()
+            for required_field in ("kind", "label", "value"):
+                if required_field not in item:
+                    raise ValueError(
+                        "each record item requires "
+                        f"'{required_field}'."
+                    )
+
+            prepared_items.append(
+                {
+                    "kind": validate_kind(item["kind"]),
+                    "label": safe_label(item["label"]),
+                    "value": item["value"],
+                    "notes": item.get("notes", ""),
+                    "metadata": item.get("metadata"),
+                }
+            )
+
+        for item in prepared_items:
+            selected_kind = item["kind"]
+            selected_label = item["label"]
 
             existing = self._find_record_in_data(
                 data=data,
@@ -267,8 +295,8 @@ class IdentityVaultService:
                 kind=selected_kind,
                 label=record["label"],
                 value=item["value"],
-                notes=item.get("notes", ""),
-                metadata=item.get("metadata"),
+                notes=item["notes"],
+                metadata=item["metadata"],
             )
 
             record["payload"] = payload

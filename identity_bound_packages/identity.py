@@ -21,7 +21,6 @@ from pathlib import Path
 from crypto import hash_text
 
 IDENTITY_DIR = Path(__file__).parent / "identities"
-IDENTITY_DIR.mkdir(exist_ok=True)
 
 
 class IdentityProfile:
@@ -51,6 +50,7 @@ def create_identity(name: str, passphrase: str, voice_phrase: str) -> str:
         "face_hash": None,
         "fingerprint_hash": None,
     }
+    IDENTITY_DIR.mkdir(parents=True, exist_ok=True)
     out = IDENTITY_DIR / f"{identity_id}.identity"
     with open(out, "w", encoding="utf-8") as f:
         json.dump(profile, f, indent=4)

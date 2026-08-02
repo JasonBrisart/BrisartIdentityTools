@@ -3,7 +3,8 @@ import os
 import secrets
 from pathlib import Path
 
-from config.settings import IDENTITY_DIR, TEMPLATE_DIR, ensure_data_dirs
+from config import settings
+from config.settings import ensure_data_dirs
 from identity.identity_record import safe_identity_id
 
 
@@ -11,12 +12,19 @@ class IdentityStoreError(Exception):
     """Raised when local identity data cannot be stored or loaded."""
 
 
+# Directories are read from the settings module on every call rather than
+# imported once into this namespace. Binding them at import time froze the
+# storage location at first import, so it could not be reconfigured (or pointed
+# at a temporary directory by a test) after that.
 def identity_path(identity_id: str) -> Path:
-    return IDENTITY_DIR / f"{safe_identity_id(identity_id)}.json"
+    return settings.IDENTITY_DIR / f"{safe_identity_id(identity_id)}.json"
 
 
 def template_path(identity_id: str) -> Path:
-    return TEMPLATE_DIR / f"{safe_identity_id(identity_id)}_template.json"
+    return (
+        settings.TEMPLATE_DIR
+        / f"{safe_identity_id(identity_id)}_template.json"
+    )
 
 
 def _flush_directory(directory: Path) -> None:
@@ -88,6 +96,10 @@ def save_template(identity_id: str, template: dict) -> None:
     save_json(template_path(identity_id), template)
 
 
+def identity_exists(identity_id: str) -> bool:
+    return identity_path(identity_id).is_file()
+
+
 def load_identity(identity_id: str) -> dict:
     path = identity_path(identity_id)
     if not path.is_file():
@@ -105,6 +117,6 @@ def load_template(identity_id: str) -> dict:
 def list_identities() -> list[dict]:
     ensure_data_dirs()
     records: list[dict] = []
-    for path in sorted(IDENTITY_DIR.glob("*.json")):
+    for path in sorted(settings.IDENTITY_DIR.glob("*.json")):
         records.append(load_json(path))
     return records

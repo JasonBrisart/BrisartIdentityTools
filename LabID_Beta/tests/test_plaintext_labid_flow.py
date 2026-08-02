@@ -138,6 +138,7 @@ class TestPlaintextLabIDFlow(unittest.TestCase):
         self.assertEqual(identity_json["identity_id"], "researcher_001")
         self.assertEqual(identity_json["display_name"], "Researcher One")
         self.assertEqual(identity_json["storage_mode"], "local_json_beta")
+        self.assertEqual(identity_json, identity)
         self.assertEqual(template_json["identity_id"], "researcher_001")
         self.assertEqual(
             identity_json["template_sha256"],

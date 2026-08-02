@@ -4,7 +4,8 @@ import os
 import secrets
 from pathlib import Path
 
-from config.settings import APP_NAME, APP_VERSION, REPORT_DIR, ensure_data_dirs
+from config import settings
+from config.settings import APP_NAME, APP_VERSION, ensure_data_dirs
 
 
 class ReportWriteError(Exception):
@@ -82,7 +83,7 @@ def write_verification_report(
         return report
 
     ensure_data_dirs()
-    report_path = REPORT_DIR / (
+    report_path = settings.REPORT_DIR / (
         f"{identity_id}_{report_timestamp()}_report.json"
     )
     report["report_file"] = str(report_path)

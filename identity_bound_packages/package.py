@@ -22,14 +22,14 @@ import json
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 
-from crypto import hash_text, hash_bytes
+from crypto import digests_equal, hash_text, hash_bytes
 from custody import append_event, verify_chain
 from verification import verify_identity
 from audit import audit_event
 
 PACKAGE_DIR = Path(__file__).parent / "packages"
-PACKAGE_DIR.mkdir(exist_ok=True)
 
 PACKAGE_FORMAT = "IBP-BETA-0.3"
 
@@ -54,7 +54,7 @@ def _sign(package: dict) -> str:
 
 
 def verify_signature(package: dict) -> bool:
-    return _sign(package) == package.get("signature")
+    return digests_equal(_sign(package), package.get("signature"))
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +72,9 @@ def identity_authorized(package: dict, identity) -> bool:
     In this single-user beta they behave like ANY. The field is stored so a
     future multi-approver flow can enforce it properly.
     """
-    policy = package["recipient_policy"]
-    return identity.identity_id in policy["recipients"]
+    policy = package.get("recipient_policy") or {}
+    recipients = policy.get("recipients") or []
+    return identity.identity_id in recipients
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +100,26 @@ def create_package(recipients, message: str, actor: str = "system",
     if isinstance(recipients, str):
         recipients = [recipients]
 
+    if not isinstance(message, str):
+        raise ValueError("message must be a string.")
+
+    if not recipients:
+        # An empty recipient list produced a package that no identity could
+        # ever open, with no error at creation time.
+        raise ValueError("at least one recipient identity_id is required.")
+
+    if mode not in ("ANY", "ALL", "THRESHOLD"):
+        raise ValueError(
+            "mode must be one of ANY, ALL, or THRESHOLD."
+        )
+
+    if mode == "THRESHOLD" and not 1 <= required <= len(recipients):
+        raise ValueError(
+            "required must be between 1 and the recipient count."
+        )
+
     package_id = str(uuid.uuid4())
-    payload_bytes = message.encode()
+    payload_bytes = message.encode("utf-8")
 
     package = {
         "format": PACKAGE_FORMAT,
@@ -120,6 +139,7 @@ def create_package(recipients, message: str, actor: str = "system",
 
     append_event(package, "PACKAGE_CREATED", actor, location)
 
+    PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
     out = PACKAGE_DIR / f"{package_id}.ibp"
     save_package(package, out)
     audit_event(f"CREATED package={package_id} recipients={recipients} mode={mode}")
@@ -158,7 +178,8 @@ def transfer_package(filepath: str, actor: str, location: str) -> None:
 # ---------------------------------------------------------------------------
 
 def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
-                  actor: str = None, location: str = "open-station") -> str:
+                  actor: Optional[str] = None,
+                  location: str = "open-station") -> str:
     """
     Full open pipeline. Raises on any failure. Returns plaintext on success.
     """
@@ -183,7 +204,10 @@ def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
         raise PermissionError("Identity factor verification failed.")
 
     plaintext = package["payload"]
-    if hash_bytes(plaintext.encode()) != package["payload_hash"]:
+    if not digests_equal(
+        hash_bytes(plaintext.encode("utf-8")),
+        package.get("payload_hash"),
+    ):
         audit_event(f"DENIED package={pid} reason=integrity actor={actor}")
         raise ValueError("Payload integrity check failed.")
 

@@ -207,6 +207,75 @@ The objective is to explore transparent, understandable, and locally controlled 
 
 ---
 
+## Quick Start
+
+Python 3.9 or newer. No third-party dependencies.
+
+```bash
+git clone https://github.com/JasonBrisart/BrisartIdentityTools.git
+cd BrisartIdentityTools
+```
+
+### Run the tests
+
+The three tools use different import roots, so one runner drives all of them:
+
+```bash
+python run_tests.py          # 69 tests across the three suites
+python run_tests.py -v       # verbose
+```
+
+### LabID: enroll and verify a local identity
+
+```bash
+cd LabID_Beta
+python app.py make-samples                                        # writes data/samples/*.pgm
+python app.py enroll jason "Jason B" data/samples/sample_enroll.pgm
+python app.py verify jason data/samples/sample_verify_close.pgm    # MATCH
+python app.py verify jason data/samples/sample_verify_far.pgm      # NO_MATCH
+python app.py list
+```
+
+Re-enrolling an existing identity is refused unless you pass `--overwrite`,
+because it replaces that identity's stored biometric template.
+
+### IdentityVault: store and read local records
+
+```bash
+python -m IdentityVault_beta.app --vault vault.json init
+python -m IdentityVault_beta.app --vault vault.json add \
+    --kind identity --label "Researcher One" --value "record-value"
+python -m IdentityVault_beta.app --vault vault.json list
+python -m IdentityVault_beta.app --vault vault.json verify
+```
+
+`--vault` is a global option, so it goes before the subcommand.
+
+### Identity-bound packages: bind a message to an identity
+
+```bash
+cd identity_bound_packages
+python main.py demo
+```
+
+---
+
+## Security Model
+
+These tools provide identity-based authorization, integrity checking, custody
+tracking, and audit logging.
+
+They do not provide confidentiality. Vault records and package payloads are
+stored as plaintext by design so they stay inspectable. Factor hashes are
+unsalted single-pass SHA-256, which is adequate for a workflow demo but is not a
+secure credential store. A production deployment needs a slow salted KDF
+(Argon2 or scrypt), protected biometric templates, and liveness detection.
+
+Digest comparisons use `hmac.compare_digest`, so verification does not leak
+match length through timing.
+
+---
+
 ## Repository Status
 
 Active Research Project.

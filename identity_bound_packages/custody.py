@@ -14,7 +14,7 @@ who can recompute the whole chain.
 import json
 from datetime import datetime, timezone
 
-from crypto import hash_text
+from crypto import digests_equal, hash_text
 
 
 def _event_hash(event: dict) -> str:
@@ -49,7 +49,13 @@ def verify_chain(package: dict) -> bool:
     """Return True if the custody chain is internally consistent."""
     previous = None
     for event in package.get("custody_chain", []):
-        if _event_hash(event) != event["event_hash"]:
+        required = ("timestamp", "action", "actor", "location",
+                    "previous_hash", "event_hash")
+        if any(field not in event for field in required):
+            # A truncated event used to raise KeyError out of a function whose
+            # contract is "return True/False"; a malformed chain is not valid.
+            return False
+        if not digests_equal(_event_hash(event), event["event_hash"]):
             return False
         if event["previous_hash"] != previous:
             return False
