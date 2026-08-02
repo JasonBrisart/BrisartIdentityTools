@@ -221,18 +221,43 @@ cd BrisartIdentityTools
 The three tools use different import roots, so one runner drives all of them:
 
 ```bash
-python run_tests.py          # 69 tests across the three suites
+python run_tests.py          # 91 tests across the three suites
 python run_tests.py -v       # verbose
 ```
 
-### LabID: enroll and verify a local identity
+### LabID: enroll and verify local face, voice, fingerprint, and video samples
 
 ```bash
 cd LabID_Beta
-python app.py make-samples                                        # writes data/samples/*.pgm
-python app.py enroll jason "Jason B" data/samples/sample_enroll.pgm
-python app.py verify jason data/samples/sample_verify_close.pgm    # MATCH
-python app.py verify jason data/samples/sample_verify_far.pgm      # NO_MATCH
+python app.py make-samples
+
+# Face (PNG or PGM)
+python app.py enroll jason-face "Jason Face" data/samples/sample_face_enroll.png --modality face
+python app.py verify jason-face data/samples/sample_face_verify_close.png --modality face   # MATCH
+python app.py verify jason-face data/samples/sample_face_verify_far.png --modality face     # NO_MATCH
+
+# Voice (WAV PCM)
+python app.py enroll jason-voice "Jason Voice" data/samples/sample_voice_enroll.wav --modality voice
+python app.py verify jason-voice data/samples/sample_voice_verify_close.wav --modality voice # MATCH
+python app.py verify jason-voice data/samples/sample_voice_verify_far.wav --modality voice   # NO_MATCH
+
+# Fingerprint (PNG)
+python app.py enroll jason-finger "Jason Finger" data/samples/sample_fingerprint_enroll.png --modality fingerprint
+python app.py verify jason-finger data/samples/sample_fingerprint_verify_close.png --modality fingerprint # MATCH
+python app.py verify jason-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint   # NO_MATCH
+python app.py enroll jason-video "Jason Video" data/samples/sample_video_enroll.avi --modality video
+python app.py verify jason-video data/samples/sample_video_verify_close.avi --modality video # MATCH
+python app.py verify jason-video data/samples/sample_video_verify_far.avi --modality video   # NO_MATCH
+
+# A recording of a still photo scores a near-perfect face match, so liveness
+# is a gate, not a score term. This one is rejected as LIVENESS_FAILED.
+python app.py verify jason-video data/samples/sample_video_photo_replay.avi --modality video
+
+# Build a recording from frames already on disk, then use it for FaceID.
+# Camera capture needs a platform driver, which would mean a dependency.
+python app.py record-video my_clip.avi frame1.png frame2.png frame3.png
+python app.py probe-video my_clip.avi
+
 python app.py list
 ```
 
@@ -263,7 +288,9 @@ python main.py demo
 ## Security Model
 
 These tools provide identity-based authorization, integrity checking, custody
-tracking, and audit logging.
+tracking, and audit logging across three local biometric modes: face images
+(PGM or PNG), voice recordings (PCM WAV), fingerprint images (PNG), and
+video FaceID recordings (uncompressed AVI).
 
 They do not provide confidentiality. Vault records and package payloads are
 stored as plaintext by design so they stay inspectable. Factor hashes are

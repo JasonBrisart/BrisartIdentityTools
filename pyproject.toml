@@ -1,6 +1,6 @@
 [project]
 name = "brisart-identity-tools"
-version = "0.4.0b0"
+version = "0.6.0b0"
 description = "Dependency-free local identity tooling: a plaintext record vault, local biometric verification, and identity-bound packages."
 readme = "README.md"
 requires-python = ">=3.9"

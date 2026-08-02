@@ -55,7 +55,15 @@ def safe_identity_id(identity_id: str) -> str:
     return candidate
 
 
-def build_identity_record(identity_id: str, display_name: str, template_file: str, template_sha256: str, threshold: float) -> dict:
+def build_identity_record(
+    identity_id: str,
+    display_name: str,
+    template_file: str,
+    template_sha256: str,
+    threshold: float,
+    modality: str = "face",
+    template_mode: str = "local_biometric_verification_beta",
+) -> dict:
     safe_id = safe_identity_id(identity_id)
     # One timestamp for both fields: two utc_now() calls can straddle a second
     # boundary and make a brand-new record look like it was already updated.
@@ -69,7 +77,8 @@ def build_identity_record(identity_id: str, display_name: str, template_file: st
         "updated_at": created,
         "status": "beta_enrolled",
         "identity_type": "local_identity_beta",
-        "biometric_mode": "local_biometric_verification_beta",
+        "biometric_modality": modality,
+        "biometric_mode": template_mode,
         "template_file": template_file,
         "template_sha256": template_sha256,
         "default_threshold": threshold,

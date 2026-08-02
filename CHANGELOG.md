@@ -2,6 +2,94 @@
 
 All notable changes to BrisartIdentityTools are recorded here.
 
+## [0.6.0-beta] - 2026-08-02
+
+Video FaceID, with liveness as an enforced gate. Still zero dependencies: the
+AVI container is parsed and written by hand with `struct`.
+
+### Added
+
+- Uncompressed AVI support in `LabID_Beta/core/video.py`: RIFF chunk walking,
+  `hdrl`/`strf` stream-format parsing, 8-bit palette and 24-bit BGR frame
+  decoding, bottom-up and top-down row order, per-row stride padding,
+  interleaved `rec ` records, plus a writer used to generate samples and to
+  prove the reader against bytes this module laid out itself.
+- `probe_avi_grayscale` for reporting resolution and frame count.
+- Video FaceID templates in `LabID_Beta/core/video_features.py`: key-frame
+  selection, per-frame face descriptors aggregated across the clip, and
+  frame-to-frame motion statistics.
+- A `video` modality wired through enroll and verify, inferred automatically
+  from an `.avi` extension.
+- **Liveness gate.** A recording of a still photograph scores a near-perfect
+  face match, so liveness is enforced as a pass/fail gate rather than blended
+  into the similarity score. A static clip returns `LIVENESS_FAILED` even when
+  its face score clears the threshold. `--allow-static` overrides the gate and
+  reports the raw score.
+- Static-recording enrollment is refused by default, so a photograph cannot be
+  baked into a template and make the verification-time gate meaningless.
+- `record-video` CLI command: assembles two or more same-size PGM/PNG frames
+  into an AVI recording usable for enrollment or verification. Camera capture
+  needs a platform-specific driver, which would mean a dependency, so the
+  recording path starts from frames already on disk.
+- `probe-video` CLI command.
+- 4 video demo samples: a live enrollment clip, a matching clip, a
+  different-subject clip that also moves, and a static photo replay.
+- 18 new tests (15 codec/template/liveness, 3 end-to-end video flow),
+  including an AVI assembled byte by byte inside the test so a matching bug in
+  both the reader and the writer would still be caught. Repository total is now
+  **91 passing tests**.
+
+### Changed
+
+- Verification reports carry a `liveness` block and a
+  `candidate_video_sha256`, and `result` can now be `LIVENESS_FAILED`.
+- The "far" video sample genuinely moves, so it exercises a face-score
+  rejection instead of being stopped by the liveness gate first.
+- `test_samples_are_written_to_the_requested_directory` no longer asserts an
+  exact sample count, which broke on every new modality; it now checks that all
+  four sample formats are present and that every file lands in the requested
+  directory.
+- CI smoke tests exercise video FaceID, the recording round trip, the photo
+  replay rejection, and the static-enrollment refusal plus its override.
+
+## [0.5.0-beta] - 2026-08-02
+
+LabID now supports three stdlib-only biometric modalities instead of just the
+original grayscale face path.
+
+### Added
+
+- Real PNG support in `LabID_Beta/core/png.py`: chunk parsing, CRC validation,
+  zlib decompression, all five PNG scanline filters, and grayscale conversion
+  for grayscale, RGB, RGBA, grayscale+alpha, and indexed images.
+- Real WAV PCM support in `LabID_Beta/core/wave_tools.py`: 8/16/24/32-bit
+  decode, stereo-to-mono downmix, and 16-bit mono output, all without `audioop`
+  so the code still runs on Python 3.13.
+- Pure-Python DSP in `LabID_Beta/core/dsp.py`: framing, Hann window, radix-2
+  FFT, power spectrum, mel filterbank, DCT-II / MFCCs, RMS, zero-crossing rate,
+  and autocorrelation pitch estimation.
+- Voice templates and verification based on MFCC summary statistics, pitch,
+  energy, and zero-crossing rate.
+- Fingerprint templates and verification based on normalized intensity,
+  orientation/coherence fields, and minutiae-like ridge ending / bifurcation
+  proxy grids.
+- Multi-modal LabID dispatch so enroll/verify now handle `face`, `voice`, and
+  `fingerprint` through one CLI.
+- Demo samples for all three modalities: face PGM/PNG, voice WAV, and
+  fingerprint PNG.
+- 4 new LabID regression/integration tests. Repository total is now 73 passing
+  tests across the three suites.
+
+### Changed
+
+- LabID face templates now accept PNG as well as PGM.
+- Verification reports now record generic candidate source hashes plus
+  modality-specific image/audio hashes.
+- Fingerprint uses a stricter default threshold (`0.975`) than face/voice
+  (`0.94`), because its score geometry is tighter and should not be forced into
+  the same threshold bucket.
+- CI smoke tests now exercise face PNG, voice WAV, and fingerprint PNG flows.
+
 ## [0.4.0-beta] - 2026-08-02
 
 First release where "beta" reflects the state of the code rather than a label.
@@ -104,7 +192,7 @@ directory, so the suite could not be executed at all. Package markers and a
 - `run_tests.py`, a single entry point that runs all three suites. The three
   application trees use different import roots, so no one `unittest discover`
   call could collect them.
-- 61 regression tests across the three suites (69 total, all passing) covering
+- 65 regression tests across the three suites (73 total, all passing) covering
   every fix above. The repository previously had 8 tests, neither suite of which
   could actually be executed.
 - GitHub Actions CI: the full suite on Python 3.9 through 3.13, a `ruff` lint

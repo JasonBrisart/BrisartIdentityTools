@@ -1,5 +1,11 @@
-from config.settings import DEFAULT_THRESHOLD
-from core.template_engine import create_template
+from typing import Optional
+from biometrics.modalities import (
+    assess_liveness,
+    create_template,
+    default_threshold_for_modality,
+    normalize_modality,
+    requires_liveness,
+)
 from identity.identity_record import (
     build_identity_record,
     safe_identity_id,
@@ -16,9 +22,11 @@ from identity.identity_store import (
 def enroll_identity(
     identity_id: str,
     display_name: str,
-    image_path: str,
-    threshold: float = DEFAULT_THRESHOLD,
+    source_path: str,
+    threshold: Optional[float] = None,
     overwrite: bool = False,
+    modality: Optional[str] = None,
+    require_live: bool = True,
 ) -> dict:
     safe_id = safe_identity_id(identity_id)
 
@@ -47,14 +55,31 @@ def enroll_identity(
             "display name cannot be empty."
         )
 
-    selected_threshold = float(threshold)
+    selected_modality = normalize_modality(modality, source_path)
+    selected_threshold = (
+        default_threshold_for_modality(selected_modality)
+        if threshold is None
+        else float(threshold)
+    )
 
     if not 0.0 <= selected_threshold <= 1.0:
         raise ValueError(
             "threshold must be between 0.0 and 1.0."
         )
 
-    template = create_template(image_path)
+    template = create_template(selected_modality, source_path)
+
+    # Enrolling from a static recording would bake a photograph into the
+    # template and make the liveness gate at verification time meaningless.
+    liveness = None
+    if requires_liveness(selected_modality):
+        liveness = assess_liveness(template)
+        if require_live and not liveness["passed"]:
+            raise ValueError(
+                f"video enrollment rejected: {liveness['reason']} "
+                "Record a live clip, or pass require_live=False / "
+                "--allow-static to enroll from a static recording anyway."
+            )
 
     record = build_identity_record(
         identity_id=safe_id,
@@ -62,10 +87,13 @@ def enroll_identity(
         template_file=str(template_path(safe_id)),
         template_sha256=template["template_sha256"],
         threshold=selected_threshold,
+        modality=selected_modality,
+        template_mode=template.get("mode", "local_biometric_verification_beta"),
     )
 
     record["storage_mode"] = "local_json_beta"
     template["identity_id"] = safe_id
+    template["modality"] = selected_modality
 
     save_identity(
         safe_id,
@@ -77,7 +105,10 @@ def enroll_identity(
         template,
     )
 
-    return {
+    result = {
         "identity": record,
         "template": template,
     }
+    if liveness is not None:
+        result["liveness"] = liveness
+    return result

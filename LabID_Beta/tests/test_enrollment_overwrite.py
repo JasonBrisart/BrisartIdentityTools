@@ -60,7 +60,7 @@ class TestEnrollmentOverwrite(unittest.TestCase):
         result = enroll_identity(
             identity_id="jason",
             display_name="Jason B",
-            image_path=self.enroll_image,
+            source_path=self.enroll_image,
         )
 
         self.assertEqual(
@@ -73,21 +73,21 @@ class TestEnrollmentOverwrite(unittest.TestCase):
         enroll_identity(
             identity_id="jason",
             display_name="Jason B",
-            image_path=self.enroll_image,
+            source_path=self.enroll_image,
         )
 
         with self.assertRaises(FileExistsError):
             enroll_identity(
                 identity_id="jason",
                 display_name="Someone Else",
-                image_path=self.other_image,
+                source_path=self.other_image,
             )
 
     def test_rejected_reenrollment_preserves_original_record(self):
         enroll_identity(
             identity_id="jason",
             display_name="Jason B",
-            image_path=self.enroll_image,
+            source_path=self.enroll_image,
         )
         original = json.loads(
             self._identity_file("jason").read_text(encoding="utf-8")
@@ -97,7 +97,7 @@ class TestEnrollmentOverwrite(unittest.TestCase):
             enroll_identity(
                 identity_id="jason",
                 display_name="Someone Else",
-                image_path=self.other_image,
+                source_path=self.other_image,
             )
 
         current = json.loads(
@@ -110,13 +110,13 @@ class TestEnrollmentOverwrite(unittest.TestCase):
         enroll_identity(
             identity_id="jason",
             display_name="Jason B",
-            image_path=self.enroll_image,
+            source_path=self.enroll_image,
         )
 
         result = enroll_identity(
             identity_id="jason",
             display_name="Jason Renewed",
-            image_path=self.other_image,
+            source_path=self.other_image,
             overwrite=True,
         )
 
@@ -129,14 +129,14 @@ class TestEnrollmentOverwrite(unittest.TestCase):
         enroll_identity(
             identity_id="jason",
             display_name="Jason B",
-            image_path=self.enroll_image,
+            source_path=self.enroll_image,
         )
 
         with self.assertRaises(FileExistsError) as caught:
             enroll_identity(
                 identity_id="jason",
                 display_name="Someone Else",
-                image_path=self.other_image,
+                source_path=self.other_image,
             )
 
         message = str(caught.exception)
@@ -148,7 +148,7 @@ class TestEnrollmentOverwrite(unittest.TestCase):
             enroll_identity(
                 identity_id="ja/son",
                 display_name="Jason B",
-                image_path=self.enroll_image,
+                source_path=self.enroll_image,
             )
 
         self.assertEqual(
@@ -160,7 +160,15 @@ class TestEnrollmentOverwrite(unittest.TestCase):
         target = self.base_path / "explicit_samples"
         written = generate_samples(output_dir=str(target))
 
-        self.assertEqual(len(written), 3)
+        # Asserting an exact count here just breaks every time a modality is
+        # added. What matters is that every generated sample landed in the
+        # requested directory and that each modality is represented.
+        self.assertGreaterEqual(len(written), 12)
+        self.assertEqual(len(written), len(set(written)))
+
+        suffixes = {Path(path_text).suffix for path_text in written}
+        self.assertEqual(suffixes, {".pgm", ".png", ".wav", ".avi"})
+
         for path_text in written:
             with self.subTest(path=path_text):
                 self.assertTrue(Path(path_text).is_file())

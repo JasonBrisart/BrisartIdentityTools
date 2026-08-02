@@ -1,6 +1,16 @@
+import hmac
+
+from biometrics.modalities import (
+    BiometricModalityError,
+    assess_liveness,
+    create_template,
+    normalize_modality,
+    requires_liveness,
+    template_similarity,
+)
+from typing import Optional
+
 from config.settings import DEFAULT_THRESHOLD
-from core.scoring import template_similarity
-from core.template_engine import create_template
 from identity.identity_record import safe_identity_id
 from identity.identity_store import (
     load_identity,
@@ -58,7 +68,7 @@ def verify_template_integrity(template: dict) -> bool:
     except Exception:
         return False
 
-    return calculated == expected
+    return hmac.compare_digest(calculated, expected)
 
 
 def _failure_report(
@@ -83,13 +93,16 @@ def _failure_report(
 
 def verify_identity(
     identity_id: str,
-    image_path: str,
+    source_path: str,
     threshold=None,
+    modality: Optional[str] = None,
+    require_live: bool = True,
 ) -> dict:
     safe_id = safe_identity_id(identity_id)
 
     identity = load_identity(safe_id)
     stored_template = load_template(safe_id)
+    selected_modality = normalize_modality(modality, source_path)
 
     selected_threshold = _selected_threshold(
         identity,
@@ -123,18 +136,33 @@ def verify_identity(
         report["storage_mode"] = "local_json_beta"
         return report
 
-    candidate_template = create_template(image_path)
+    stored_modality = identity.get("biometric_modality", "face")
+    if stored_modality != selected_modality:
+        raise BiometricModalityError(
+            f"identity {safe_id} is enrolled for modality {stored_modality}, "
+            f"not {selected_modality}."
+        )
+
+    candidate_template = create_template(selected_modality, source_path)
 
     score = template_similarity(
         stored_template,
         candidate_template,
     )
 
-    result = (
-        "MATCH"
-        if score >= selected_threshold
-        else "NO_MATCH"
-    )
+    # Liveness is a gate, not a score component. A recording of a photograph can
+    # score a near-perfect face match, so a failed liveness check has to be able
+    # to reject a candidate that would otherwise pass the threshold.
+    liveness = None
+    if requires_liveness(selected_modality):
+        liveness = assess_liveness(candidate_template)
+
+    if liveness is not None and require_live and not liveness["passed"]:
+        result = "LIVENESS_FAILED"
+    elif score >= selected_threshold:
+        result = "MATCH"
+    else:
+        result = "NO_MATCH"
 
     report = write_verification_report(
         identity=identity,
@@ -143,6 +171,7 @@ def verify_identity(
         threshold=selected_threshold,
         stored_template=stored_template,
         candidate_template=candidate_template,
+        liveness=liveness,
         persist=True,
     )
 

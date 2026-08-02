@@ -55,6 +55,7 @@ def write_verification_report(
     threshold: float,
     stored_template: dict,
     candidate_template: dict,
+    liveness=None,
     persist: bool = True,
 ) -> dict:
     identity_id = identity["identity_id"]
@@ -72,12 +73,27 @@ def write_verification_report(
         "candidate_template_sha256": candidate_template.get(
             "template_sha256"
         ),
+        "candidate_source_sha256": (
+            candidate_template.get("source_image_sha256")
+            or candidate_template.get("source_audio_sha256")
+            or candidate_template.get("source_video_sha256")
+        ),
         "candidate_image_sha256": candidate_template.get(
             "source_image_sha256"
         ),
-        "mode": "local_biometric_verification_beta",
+        "candidate_audio_sha256": candidate_template.get(
+            "source_audio_sha256"
+        ),
+        "candidate_video_sha256": candidate_template.get(
+            "source_video_sha256"
+        ),
+        "modality": identity.get("biometric_modality"),
+        "mode": identity.get("biometric_mode", "local_biometric_verification_beta"),
         "report_file": None,
     }
+
+    if liveness is not None:
+        report["liveness"] = liveness
 
     if not persist:
         return report

@@ -64,21 +64,86 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: LabID enroll and verify round trip
+      - name: LabID face PNG round trip
         working-directory: LabID_Beta
         run: |
           set -euo pipefail
           python app.py make-samples
-          python app.py enroll ci-user "CI User" data/samples/sample_enroll.pgm
-          python app.py verify ci-user data/samples/sample_verify_close.pgm
+          python app.py enroll ci-face "CI Face" data/samples/sample_face_enroll.png --modality face
+          python app.py verify ci-face data/samples/sample_face_verify_close.png --modality face
+          python app.py verify ci-face data/samples/sample_face_verify_far.png --modality face
           python app.py list
-          python app.py inspect ci-user
+          python app.py inspect ci-face
+
+      - name: LabID voice WAV round trip
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py enroll ci-voice "CI Voice" data/samples/sample_voice_enroll.wav --modality voice
+          python app.py verify ci-voice data/samples/sample_voice_verify_close.wav --modality voice
+          python app.py verify ci-voice data/samples/sample_voice_verify_far.wav --modality voice
+
+      - name: LabID fingerprint PNG round trip
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py enroll ci-finger "CI Finger" data/samples/sample_fingerprint_enroll.png --modality fingerprint
+          python app.py verify ci-finger data/samples/sample_fingerprint_verify_close.png --modality fingerprint
+          python app.py verify ci-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint
+
+      - name: LabID video FaceID round trip
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py enroll ci-video "CI Video" data/samples/sample_video_enroll.avi --modality video
+          python app.py verify ci-video data/samples/sample_video_verify_close.avi --modality video
+          python app.py verify ci-video data/samples/sample_video_verify_far.avi --modality video
+
+      - name: LabID video recording round trip
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          python app.py record-video /tmp/ci_recording.avi \
+            data/samples/sample_face_enroll.png \
+            data/samples/sample_face_verify_close.png \
+            data/samples/sample_face_enroll.png \
+            data/samples/sample_face_verify_close.png
+          python app.py probe-video /tmp/ci_recording.avi
+          python app.py enroll ci-recorded "CI Recorded" /tmp/ci_recording.avi --modality video
+          python app.py verify ci-recorded /tmp/ci_recording.avi --modality video
+
+      - name: Photo replay is rejected by the liveness gate
+        working-directory: LabID_Beta
+        run: |
+          set -euo pipefail
+          # A recording of a still photo scores a near-perfect face match, so
+          # only the liveness gate can stop it. Assert on the reported result.
+          result=$(python app.py verify ci-video \
+            data/samples/sample_video_photo_replay.avi --modality video \
+            | awk -F': ' '/^Result:/ {print $2}')
+          if [ "$result" != "LIVENESS_FAILED" ]; then
+            echo "Expected LIVENESS_FAILED for a static photo replay, got: $result"
+            exit 1
+          fi
+          echo "Photo replay correctly gated."
+
+      - name: Static video enrollment is refused without --allow-static
+        working-directory: LabID_Beta
+        run: |
+          if python app.py enroll ci-static "CI Static" \
+              data/samples/sample_video_photo_replay.avi --modality video; then
+            echo "Expected static video enrollment to be refused"
+            exit 1
+          fi
+          python app.py enroll ci-static "CI Static" \
+            data/samples/sample_video_photo_replay.avi --modality video --allow-static
+          echo "Static enrollment gated, override works."
 
       - name: Re-enrollment is refused without --overwrite
         working-directory: LabID_Beta
         run: |
-          if python app.py enroll ci-user "Someone Else" \
-              data/samples/sample_verify_far.pgm; then
+          if python app.py enroll ci-face "Someone Else" \
+              data/samples/sample_face_verify_far.png --modality face; then
             echo "Expected re-enrollment to fail without --overwrite"
             exit 1
           fi
@@ -88,14 +153,14 @@ jobs:
         working-directory: LabID_Beta
         run: |
           set -euo pipefail
-          python app.py enroll ci-user "CI Renewed" \
-            data/samples/sample_verify_far.pgm --overwrite
+          python app.py enroll ci-face "CI Face Renewed" \
+            data/samples/sample_face_verify_far.png --modality face --overwrite
 
       - name: Invalid identity ids are rejected
         working-directory: LabID_Beta
         run: |
           if python app.py enroll "ci/user" "Bad Id" \
-              data/samples/sample_enroll.pgm; then
+              data/samples/sample_face_enroll.png --modality face; then
             echo "Expected an invalid identity id to be rejected"
             exit 1
           fi

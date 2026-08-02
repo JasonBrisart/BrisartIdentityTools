@@ -111,7 +111,7 @@ class TestPlaintextLabIDFlow(unittest.TestCase):
         result = enroll_identity(
             identity_id="researcher_001",
             display_name="Researcher One",
-            image_path=str(self.enroll_image),
+            source_path=str(self.enroll_image),
             threshold=0.0,
         )
 
@@ -149,13 +149,13 @@ class TestPlaintextLabIDFlow(unittest.TestCase):
         enroll_identity(
             identity_id="researcher_001",
             display_name="Researcher One",
-            image_path=str(self.enroll_image),
+            source_path=str(self.enroll_image),
             threshold=0.0,
         )
 
         report = verify_identity(
             identity_id="researcher_001",
-            image_path=str(self.close_image),
+            source_path=str(self.close_image),
             threshold=0.0,
         )
 
@@ -180,7 +180,7 @@ class TestPlaintextLabIDFlow(unittest.TestCase):
         enroll_identity(
             identity_id="researcher_001",
             display_name="Researcher One",
-            image_path=str(self.enroll_image),
+            source_path=str(self.enroll_image),
             threshold=0.0,
         )
 
@@ -201,7 +201,7 @@ class TestPlaintextLabIDFlow(unittest.TestCase):
 
         report = verify_identity(
             identity_id="researcher_001",
-            image_path=str(self.close_image),
+            source_path=str(self.close_image),
             threshold=0.0,
         )
 
