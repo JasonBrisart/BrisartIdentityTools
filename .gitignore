@@ -59,6 +59,25 @@ desktop.ini
 .env.production
 .env.test
 
+# BSR2 key material. device_key.json decrypts every LabID biometric template
+# in its data directory, so it must never reach the repository. Listed by name
+# as well as by directory in case a data directory is ever relocated.
+device_key.json
+*.identity
+
+# ---------------------------------------------------------------------------
+# Runtime data written by the three application trees
+#
+# These hold real identity records, sealed biometric templates, verification
+# reports, and sealed packages produced by local or CI runs. They are generated
+# artefacts containing personal and key material, never source.
+# ---------------------------------------------------------------------------
+LabID_Beta/data/
+identity_bound_packages/identities/
+identity_bound_packages/packages/
+IdentityVault_beta/vaults/
+*.ibp
+
 # ---------------------------------------------------------------------------
 # Generic Cache / Temp / Logs
 # ---------------------------------------------------------------------------
