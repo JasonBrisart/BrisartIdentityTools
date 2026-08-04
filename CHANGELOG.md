@@ -52,6 +52,11 @@ See **Changed** and **Migration** below.
 
 ### Changed
 
+- **Minimum Python is now 3.10** (was 3.9). Vendored BSR2 uses `int | None` in
+  annotations that Python evaluates at import time, so 3.9 fails to import the
+  envelope module. Patching the vendored file would break byte-identical
+  vendoring and the digest pin in `tests/test_bsr2_vendor_integrity.py`, so the
+  floor moved instead. CI covers 3.10 through 3.13.
 - **Vault record values are sealed** under the vault master key. Record shells
   (`record_id`, `kind`, `label`, timestamps) stay readable so `list` and `verify`
   work while locked — a deliberate metadata trade-off, documented rather than

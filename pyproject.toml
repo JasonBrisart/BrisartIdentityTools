@@ -3,7 +3,11 @@ name = "brisart-identity-tools"
 version = "0.7.0b0"
 description = "Dependency-free local identity tooling: a BSR2-encrypted record vault, local biometric verification with sealed templates, and identity-bound packages."
 readme = "README.md"
-requires-python = ">=3.9"
+# 3.10 is the floor because vendored BSR2 uses PEP 604 (`int | None`) in
+# runtime-evaluated annotations without `from __future__ import annotations`.
+# Patching that would break byte-identical vendoring and the digest pin in
+# tests/test_bsr2_vendor_integrity.py, which is worth more than 3.9 support.
+requires-python = ">=3.10"
 # LICENSE points at the Brisart ecosystem licensing terms rather than embedding
 # an SPDX-recognised license text, so no SPDX identifier is asserted here.
 license = { file = "LICENSE" }
@@ -13,7 +17,6 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -28,7 +31,7 @@ Issues = "https://github.com/JasonBrisart/BrisartIdentityTools/issues"
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 # bsr2_vendor/ holds BSR2 vendored byte-identical from upstream and pinned by
 # digest in tests/test_bsr2_vendor_integrity.py. Linting it would invite edits
 # that break that pin, so it is excluded rather than fixed.

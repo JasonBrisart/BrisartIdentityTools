@@ -209,7 +209,12 @@ The objective is to explore transparent, understandable, and locally controlled 
 
 ## Quick Start
 
-Python 3.9 or newer. No third-party dependencies.
+Python 3.10 or newer. No third-party dependencies.
+
+The floor is 3.10 rather than 3.9 because vendored BSR2 uses `int | None`
+annotations that Python evaluates at import time. Patching the vendored file
+would break byte-identical vendoring and the digest pin that proves it matches
+upstream, so the floor moved instead.
 
 ```bash
 git clone https://github.com/JasonBrisart/BrisartIdentityTools.git
