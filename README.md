@@ -209,7 +209,12 @@ The objective is to explore transparent, understandable, and locally controlled 
 
 ## Quick Start
 
-Python 3.9 or newer. No third-party dependencies.
+Python 3.10 or newer. No third-party dependencies.
+
+The floor is 3.10 rather than 3.9 because vendored BSR2 uses `int | None`
+annotations that Python evaluates at import time. Patching the vendored file
+would break byte-identical vendoring and the digest pin that proves it matches
+upstream, so the floor moved instead.
 
 ```bash
 git clone https://github.com/JasonBrisart/BrisartIdentityTools.git
@@ -244,7 +249,8 @@ python app.py verify jason-voice data/samples/sample_voice_verify_far.wav --moda
 # Fingerprint (PNG)
 python app.py enroll jason-finger "Jason Finger" data/samples/sample_fingerprint_enroll.png --modality fingerprint
 python app.py verify jason-finger data/samples/sample_fingerprint_verify_close.png --modality fingerprint # MATCH
-python app.py verify jason-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint   # NO_MATCH
+python app.py verify jason-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint   # NO_MATCH
+
 python app.py enroll jason-video "Jason Video" data/samples/sample_video_enroll.avi --modality video
 python app.py verify jason-video data/samples/sample_video_verify_close.avi --modality video # MATCH
 python app.py verify jason-video data/samples/sample_video_verify_far.avi --modality video   # NO_MATCH
@@ -276,6 +282,19 @@ python -m IdentityVault_beta.app --vault vault.json verify
 
 `--vault` is a global option, so it goes before the subcommand.
 
+`init` prints a **recovery code once**. Write it down: without it or the
+passphrase, the vault cannot be opened by anyone, including you.
+
+Every command that touches record values unlocks the vault first, which runs
+BSR2's slow key derivation — expect roughly a minute per invocation, and about
+three for `init` (it derives both the passphrase and recovery wrappers). That is
+the KDF working as intended, not a hang. `list` and `verify` read record shells
+only, so they do not need the passphrase.
+
+For scripting, `IDENTITY_VAULT_PASSPHRASE` is honoured instead of the prompt.
+Convenient and less secret: environment variables are visible to other processes
+of the same user and often land in shell history and CI logs.
+
 ### Identity-bound packages: bind a message to an identity
 
 ```bash
@@ -283,23 +302,101 @@ cd identity_bound_packages
 python main.py demo
 ```
 
+The demo creates an identity, seals a package to it, records a custody transfer,
+opens it, then shows a wrong passphrase being refused. It performs three BSR2
+derivations, so it takes several minutes end to end.
+
+Creating a package requires every recipient's identity to be **unlocked**, which
+is a consequence of symmetric-only crypto rather than an oversight; see
+`identity_bound_packages/package.py`.
+
 ---
 
 ## Security Model
 
 These tools provide identity-based authorization, integrity checking, custody
-tracking, and audit logging across three local biometric modes: face images
+tracking, and audit logging across four local biometric modes: face images
 (PGM or PNG), voice recordings (PCM WAV), fingerprint images (PNG), and
 video FaceID recordings (uncompressed AVI).
 
-They do not provide confidentiality. Vault records and package payloads are
-stored as plaintext by design so they stay inspectable. Factor hashes are
-unsalted single-pass SHA-256, which is adequate for a workflow demo but is not a
-secure credential store. A production deployment needs a slow salted KDF
-(Argon2 or scrypt), protected biometric templates, and liveness detection.
+### Confidentiality
 
-Digest comparisons use `hmac.compare_digest`, so verification does not leak
-match length through timing.
+Confidentiality is provided by **BSR2**
+([BrisartSecurityResearch](https://github.com/JasonBrisart/BrisartSecurityResearch)),
+vendored unmodified in `bsr2_vendor/` and pinned by digest in
+`tests/test_bsr2_vendor_integrity.py`. No cryptographic primitive is
+implemented in this repository, and there are still zero third-party
+dependencies: BSR2 is standard library only, as is everything here.
+
+What is encrypted at rest:
+
+| Data | Protected under | Notes |
+| --- | --- | --- |
+| Vault record values | Passphrase-derived master key | Record *shells* (id, kind, label, timestamps) stay readable |
+| LabID biometric templates | Local device key | Bound to identity id + modality |
+| Package payloads | Per-package random content key | Content key wrapped once per recipient |
+
+Every sealed object is bound to a **context string** naming what it is, so a
+ciphertext cannot be moved between records, identities, modalities, or
+recipients. A moved envelope fails authentication rather than decrypting into
+the wrong slot. Plaintext is length-prefixed and padded to 256-byte blocks
+before sealing, so ciphertext size does not reveal the exact length of a
+credential.
+
+Passphrases go through BSR2's `derive_password_key`. It is slow on purpose:
+measured at roughly 85-90 seconds per derivation on the development machine, at
+BSR2's enforced 10,000-iteration minimum. Rather than pay that per operation, a
+random 32-byte master key is wrapped under the passphrase and again under an
+offline recovery code, so unlocking costs one derivation per session and every
+subsequent operation is fast. Vault `init` derives both wrappers and so takes
+about three minutes. **Losing both the passphrase and the recovery code is
+unrecoverable by design.**
+
+The iteration count is recorded in the keyring header and validated on read, so
+editing it downward to force a cheap derivation is rejected rather than honoured.
+
+Factor protection is split by input entropy: low-entropy secrets (passphrases,
+spoken phrases) get the slow KDF, while high-entropy ones (template digests,
+signature blobs) get a fast keyed MAC under the master key. Stretching a
+high-entropy input buys nothing; applying a fast MAC to a low-entropy one is a
+real weakness. See `brisart_bsr2/factors.py`.
+
+Digest comparisons use constant-time equality, so verification does not leak
+match length through timing. Online guessing is bounded by a caller-persisted
+attempt limiter (`brisart_bsr2/throttle.py`).
+
+### What this does not protect against
+
+Stated plainly rather than left implied:
+
+- **Vault record labels are readable while locked.** Listing and searching work
+  without unlocking, so the vault reveals that a record labelled `bank-login`
+  exists while protecting its value. Hiding labels would require decrypting
+  every record for any lookup.
+- **The LabID device key sits beside the data it protects.** LabID is an
+  unattended verification service with no human present to enter a passphrase,
+  so anyone with filesystem read access to its data directory can decrypt every
+  template. Use an encrypted volume or restrictive file permissions if that
+  matters. See `LabID_Beta/identity/device_key.py`.
+- **Package creation requires every recipient unlocked.** BSR2 is symmetric and
+  this project takes no third-party dependencies, so there is no public-key
+  mechanism to seal a payload to a recipient the creator cannot open.
+- **The package `signature` field is a shared-secret hash, not a digital
+  signature.** It detects alteration; it does not prove origin.
+- **Biometric matching is threshold-based on hand-rolled DSP features**, not a
+  trained model. Liveness is enforced as a gate for video, but these are
+  research-grade matchers.
+
+Upstream BSR2's own `SECURITY.md` states it is research software and should not
+be used as the sole protection for credentials, identity records, or recovery
+secrets. That caveat applies here too. Full threat model:
+[`docs/BSR2_INTEGRATION.md`](docs/BSR2_INTEGRATION.md).
+
+### Key material and the repository
+
+`device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories
+are gitignored. A device key decrypts every template in its directory, so it
+must never be committed.
 
 ---
 

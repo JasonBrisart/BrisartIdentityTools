@@ -1,8 +1,17 @@
 from pathlib import Path
+from typing import Optional
 
+from brisart_bsr2 import envelope as _envelope
+from brisart_bsr2.context import record_context
+from brisart_bsr2.errors import Bsr2IntegrationError
+from brisart_bsr2.keyring import MASTER_KEY_BYTES, Keyring
+from brisart_bsr2.rng import new_generator
 from IdentityVault_beta.config.settings import (
     APP_NAME,
     APP_VERSION,
+    FORMAT_VERSION,
+    PLAINTEXT_STORAGE_MODE,
+    SEALED_STORAGE_MODE,
 )
 from IdentityVault_beta.core.time_tools import utc_now
 from IdentityVault_beta.core.ids import safe_label
@@ -10,6 +19,8 @@ from IdentityVault_beta.records.record_model import (
     build_plain_payload,
     build_record_shell,
     validate_kind,
+    payload_from_bytes,
+    payload_to_bytes,
 )
 from IdentityVault_beta.reports.audit_log import append_audit
 from IdentityVault_beta.vault.vault_file import (
@@ -18,14 +29,116 @@ from IdentityVault_beta.vault.vault_file import (
 )
 
 
+class VaultLockedError(Exception):
+    """Raised when an operation needs a master key the service does not hold."""
+
+
 class IdentityVaultService:
-    def __init__(self, vault_path: str):
+    """Vault operations over a BSR2-sealed vault file.
+
+    Record *payloads* are encrypted. Record shells stay readable: ``record_id``,
+    ``kind``, ``label``, and timestamps are stored in the clear so records can be
+    listed, searched, and deduplicated without unlocking the vault. That is a
+    deliberate trade — the vault leaks that a credential labelled
+    ``bank-login`` exists while protecting its value. Hiding labels too would
+    require decrypting every record for any lookup, and would make the vault
+    unusable at the CLI.
+
+    The master key is held in memory only after :meth:`unlock`, and only for the
+    lifetime of the service object.
+    """
+
+    def __init__(self, vault_path: str, master_key: Optional[bytes] = None):
         self.vault_path = str(vault_path)
+        self._master_key = None
+        if master_key is not None:
+            self.adopt_master_key(master_key)
+
+    # ------------------------------------------------------------------ locking
+
+    def adopt_master_key(self, master_key: bytes) -> None:
+        """Attach an already-unwrapped master key, skipping the slow derivation."""
+        if (
+            not isinstance(master_key, (bytes, bytearray))
+            or len(master_key) != MASTER_KEY_BYTES
+        ):
+            raise Bsr2IntegrationError(
+                f"master key must be {MASTER_KEY_BYTES} bytes."
+            )
+        self._master_key = bytes(master_key)
+
+    def unlock(self, passphrase: str) -> None:
+        """Unlock with the vault passphrase.
+
+        Slow by design: BSR2's passphrase derivation takes on the order of a
+        minute. Unlock once and reuse the service instance.
+        """
+        data = load_vault_file(self.vault_path)
+        keyring_state = data.get("keyring")
+
+        if not isinstance(keyring_state, dict):
+            raise Bsr2IntegrationError(
+                "vault has no keyring; it predates BSR2 and must be migrated."
+            )
+
+        self._master_key = Keyring(keyring_state).unlock_with_passphrase(
+            passphrase
+        )
+
+    def unlock_with_recovery_code(self, recovery_code: str) -> None:
+        """Unlock with the offline recovery code issued at initialize()."""
+        data = load_vault_file(self.vault_path)
+        keyring_state = data.get("keyring")
+
+        if not isinstance(keyring_state, dict):
+            raise Bsr2IntegrationError(
+                "vault has no keyring; it predates BSR2 and must be migrated."
+            )
+
+        self._master_key = Keyring(keyring_state).unlock_with_recovery_code(
+            recovery_code
+        )
+
+    def lock(self) -> None:
+        self._master_key = None
+
+    @property
+    def is_unlocked(self) -> bool:
+        return self._master_key is not None
+
+    @property
+    def master_key(self) -> bytes:
+        if self._master_key is None:
+            raise VaultLockedError(
+                "vault is locked; call unlock() before reading or writing "
+                "record values."
+            )
+        return self._master_key
+
+    # --------------------------------------------------------------- initialize
 
     def initialize(
         self,
+        passphrase: Optional[str] = None,
         overwrite: bool = False,
-    ) -> dict:
+        master_key: Optional[bytes] = None,
+    ):
+        """Create a new sealed vault.
+
+        Returns ``(data, recovery_code)``. The recovery code is displayed once
+        and is not recoverable from the vault file; losing both it and the
+        passphrase makes every record permanently unreadable. That is the
+        intended property of an offline encrypted store, but it is worth saying
+        out loud before a user commits data to it.
+
+        ``master_key`` creates a vault with **no keyring**, sealed directly under
+        a caller-supplied key. It exists so tests and known-answer vectors do not
+        pay for a passphrase derivation that takes minutes. Such a vault cannot be
+        unlocked by passphrase, only by re-supplying the same key, and
+        ``recovery_code`` is ``None``. Do not use it for a vault holding real
+        data: the key has to live somewhere, and if that somewhere is a script
+        next to the vault file the encryption achieves nothing.
+        """
         path = Path(self.vault_path)
 
         if path.exists() and not overwrite:
@@ -33,25 +146,45 @@ class IdentityVaultService:
                 f"vault already exists: {path}"
             )
 
+        if master_key is not None:
+            if passphrase is not None:
+                raise Bsr2IntegrationError(
+                    "pass either a passphrase or a master_key, not both."
+                )
+            self.adopt_master_key(master_key)
+            keyring_state = None
+            recovery_code = None
+        else:
+            if not isinstance(passphrase, str) or not passphrase:
+                raise Bsr2IntegrationError(
+                    "a passphrase is required to initialize a sealed vault."
+                )
+            keyring, recovery_code = Keyring.create(passphrase)
+            self._master_key = keyring.master_key
+            keyring_state = keyring.to_state()
+
         now = utc_now()
 
         data = {
             "app": APP_NAME,
             "app_version": APP_VERSION,
-            "format_version": 1,
+            "format_version": FORMAT_VERSION,
             "created_at": now,
             "updated_at": now,
-            "storage_mode": "plaintext_json_beta",
+            "storage_mode": SEALED_STORAGE_MODE,
             "records": {},
             "audit_log": [],
         }
+
+        if keyring_state is not None:
+            data["keyring"] = keyring_state
 
         append_audit(
             data,
             "init_vault",
             {
                 "vault_path": self.vault_path,
-                "storage_mode": "plaintext_json_beta",
+                "storage_mode": SEALED_STORAGE_MODE,
             },
         )
 
@@ -60,7 +193,7 @@ class IdentityVaultService:
             data,
         )
 
-        return data
+        return data, recovery_code
 
     def load(self) -> dict:
         data = load_vault_file(self.vault_path)
@@ -76,6 +209,39 @@ class IdentityVaultService:
             self.vault_path,
             data,
         )
+
+    # ------------------------------------------------------------ seal / unseal
+
+    def _seal_payload(self, record: dict, payload: dict) -> dict:
+        context = record_context(
+            record["record_id"], record["kind"], record["label"]
+        )
+        return _envelope.seal_bytes(
+            self.master_key,
+            payload_to_bytes(payload),
+            context,
+            new_generator("vault-record"),
+        )
+
+    def _open_payload(self, record: dict) -> dict:
+        """Return a record's payload, sealed or legacy plaintext."""
+        sealed = record.get("sealed_payload")
+
+        if sealed is not None:
+            context = record_context(
+                record["record_id"], record["kind"], record["label"]
+            )
+            plaintext = _envelope.open_bytes(
+                self.master_key, sealed, context
+            )
+            return payload_from_bytes(plaintext)
+
+        legacy = record.get("payload")
+        if isinstance(legacy, dict):
+            # Pre-BSR2 record. Readable so an upgrade does not strand data.
+            return legacy
+
+        raise ValueError("record payload is missing or invalid.")
 
     def _validate_structure(self, data: dict) -> None:
         required_fields = {
@@ -185,8 +351,8 @@ class IdentityVaultService:
             metadata=metadata,
         )
 
-        record["payload"] = payload
-        record["storage_mode"] = "plaintext_json_beta"
+        record["sealed_payload"] = self._seal_payload(record, payload)
+        record["storage_mode"] = SEALED_STORAGE_MODE
 
         data["records"][record["record_id"]] = record
 
@@ -197,7 +363,7 @@ class IdentityVaultService:
                 "record_id": record["record_id"],
                 "kind": record["kind"],
                 "label": record["label"],
-                "storage_mode": "plaintext_json_beta",
+                "storage_mode": SEALED_STORAGE_MODE,
             },
         )
 
@@ -299,8 +465,11 @@ class IdentityVaultService:
                 metadata=item["metadata"],
             )
 
-            record["payload"] = payload
-            record["storage_mode"] = "plaintext_json_beta"
+            record["sealed_payload"] = self._seal_payload(record, payload)
+            record["storage_mode"] = SEALED_STORAGE_MODE
+            # An updated pre-BSR2 record is re-sealed, so the old cleartext
+            # payload must not be left behind next to the new envelope.
+            record.pop("payload", None)
 
             data["records"][record["record_id"]] = record
 
@@ -311,7 +480,7 @@ class IdentityVaultService:
                     "record_id": record["record_id"],
                     "kind": record["kind"],
                     "label": record["label"],
-                    "storage_mode": "plaintext_json_beta",
+                    "storage_mode": SEALED_STORAGE_MODE,
                 },
             )
 
@@ -336,12 +505,7 @@ class IdentityVaultService:
                 f"record not found: {record_id}"
             )
 
-        payload = record.get("payload")
-
-        if not isinstance(payload, dict):
-            raise ValueError(
-                "record payload is missing or invalid."
-            )
+        payload = self._open_payload(record)
 
         if payload.get("kind") != record["kind"]:
             raise ValueError(
@@ -433,15 +597,14 @@ class IdentityVaultService:
         data = self.load()
         checked = 0
         failures = []
+        unprotected = []
 
         for record in data["records"].values():
             try:
-                payload = record.get("payload")
+                if record.get("sealed_payload") is None:
+                    unprotected.append(record.get("record_id"))
 
-                if not isinstance(payload, dict):
-                    raise ValueError(
-                        "record payload is missing or invalid."
-                    )
+                payload = self._open_payload(record)
 
                 if payload.get("kind") != record["kind"]:
                     raise ValueError(
@@ -467,8 +630,12 @@ class IdentityVaultService:
             "vault_path": self.vault_path,
             "checked_records": checked,
             "failed_records": failures,
+            "unprotected_records": unprotected,
             "result": "OK" if not failures else "FAILED",
-            "storage_mode": "plaintext_json_beta",
+            "storage_mode": data.get(
+                "storage_mode",
+                PLAINTEXT_STORAGE_MODE,
+            ),
         }
 
     def manifest(self) -> dict:
@@ -482,7 +649,7 @@ class IdentityVaultService:
             "updated_at": data.get("updated_at"),
             "storage_mode": data.get(
                 "storage_mode",
-                "plaintext_json_beta",
+                PLAINTEXT_STORAGE_MODE,
             ),
             "record_count": len(data["records"]),
             "records": self.list_records(),
@@ -498,6 +665,6 @@ class IdentityVaultService:
             "updated_at": record["updated_at"],
             "storage_mode": record.get(
                 "storage_mode",
-                "plaintext_json_beta",
+                PLAINTEXT_STORAGE_MODE,
             ),
         }

@@ -8,10 +8,12 @@ on every call instead of updating in place.
 """
 
 import json
+import secrets
 import tempfile
 import unittest
 from pathlib import Path
 
+from brisart_bsr2.keyring import MASTER_KEY_BYTES
 from IdentityVault_beta.vault.vault_service import IdentityVaultService
 
 
@@ -22,7 +24,10 @@ class TestLabelNormalization(unittest.TestCase):
             Path(self.temporary_directory.name) / "vault.json"
         )
         self.service = IdentityVaultService(str(self.vault_path))
-        self.service.initialize()
+        # Injected key, not a passphrase: see the note in test_batch_upsert.
+        self.service.initialize(
+            master_key=secrets.token_bytes(MASTER_KEY_BYTES)
+        )
 
     def tearDown(self):
         self.temporary_directory.cleanup()

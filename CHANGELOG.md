@@ -2,6 +2,125 @@
 
 All notable changes to BrisartIdentityTools are recorded here.
 
+## [0.7.0-beta] - 2026-08-04
+
+Encryption at rest, using real BSR2. Everything the repository previously stored
+in the clear — vault record values, biometric templates, package payloads — is
+now sealed with authenticated encryption. Still zero third-party dependencies:
+BSR2 is standard library only, and it is vendored rather than depended on.
+
+This release changes stored formats and refuses some previously readable files.
+See **Changed** and **Migration** below.
+
+### Added
+
+- `bsr2_vendor/`: BSR2 vendored **byte-identical** from
+  [BrisartSecurityResearch](https://github.com/JasonBrisart/BrisartSecurityResearch)
+  at commit `656d962c447b7ac69d76b717820c34ae8e56b38a` — sponge primitives,
+  authenticated envelope, DRBG, and OS entropy collection. No cryptographic
+  primitive is implemented in this repository.
+- `tests/test_bsr2_vendor_integrity.py`: pins every vendored file by SHA-256, so
+  an upstream drift or a local edit fails the suite instead of silently changing
+  what ships.
+- `brisart_bsr2/`: the integration layer between BSR2 and the three tools.
+  - `keyring.py` — master-key wrapping. A random 32-byte master key is sealed
+    under a passphrase-derived key and again under an offline recovery code, so
+    unlocking costs one slow derivation per session rather than one per
+    operation.
+  - `envelope.py` — seal/open with length-hiding padding (8-byte length prefix,
+    256-byte blocks) applied inside the authenticated plaintext.
+  - `context.py` — canonical context strings binding each ciphertext to the
+    object it belongs to.
+  - `factors.py` — factor hashing split by input entropy.
+  - `rng.py` — DRBG seeded from `secrets.token_bytes` with transparent reseeding
+    at upstream's lifecycle limits.
+  - `throttle.py` — `AttemptLimiter` with caller-persisted state.
+  - `errors.py` — one exception family; callers never import vendor exceptions.
+- Offline recovery codes: 40 characters of Crockford base32 (200 bits), shown
+  once at `init`. A second full-strength path to the master key, which is the
+  price of being able to recover at all.
+- `LabID_Beta/identity/device_key.py`: 32-byte local device key, created on first
+  use with mode `0600` via `os.open` so it is never briefly world-readable.
+  Refuses to overwrite an existing key, which would orphan every sealed
+  template.
+- `docs/BSR2_INTEGRATION.md`: full threat model — what each protection buys, the
+  KDF cost reasoning, per-tool boundaries, and residual risks.
+- New tests covering round trips, tamper rejection, context binding (a template
+  sealed for one identity cannot be moved to another), keyring unlock failure,
+  recovery-code unlock, iteration-downgrade rejection, and legacy migration.
+  Repository total is now **111 passing tests**.
+
+### Changed
+
+- **Minimum Python is now 3.10** (was 3.9). Vendored BSR2 uses `int | None` in
+  annotations that Python evaluates at import time, so 3.9 fails to import the
+  envelope module. Patching the vendored file would break byte-identical
+  vendoring and the digest pin in `tests/test_bsr2_vendor_integrity.py`, so the
+  floor moved instead. CI covers 3.10 through 3.13.
+- **Vault record values are sealed** under the vault master key. Record shells
+  (`record_id`, `kind`, `label`, timestamps) stay readable so `list` and `verify`
+  work while locked — a deliberate metadata trade-off, documented rather than
+  implied.
+- **Biometric templates are sealed** under the device key and bound to identity
+  id plus modality. Template format is now
+  `brisart-identity-tools/labid-template/v2`.
+- **Package payloads are sealed** under a random per-package content key, which
+  is itself wrapped once per recipient. Consequence: creating a package requires
+  every recipient's identity unlocked at creation time, because BSR2 is
+  symmetric and there is no public-key path without a dependency.
+- Factor hashing replaced unsalted single-pass SHA-256, which leaked shared
+  secrets through identical digests and fell to GPU guessing. Low-entropy inputs
+  now use BSR2's slow KDF; high-entropy inputs use a keyed MAC, because
+  stretching them adds nothing while a fast digest on a passphrase is a real
+  weakness.
+- Package verification runs cheap structural checks before expensive factor
+  verification, so a tampered package is rejected without paying for a
+  derivation.
+- `IdentityProfile`'s keyring is now built lazily, so an identity that only ever
+  adopts a master key directly is no longer forced to carry and validate a
+  keyring it never uses.
+- Renamed `test_plaintext_vault.py` → `test_sealed_vault.py` and
+  `test_plaintext_labid_flow.py` → `test_sealed_labid_flow.py`; both previously
+  asserted that data was readable on disk.
+- `.gitignore` now excludes `device_key.json`, `*.identity`, `*.ibp`, and runtime
+  `data/` directories. A device key decrypts every template beside it.
+- CI smoke job sets `IDENTITY_VAULT_PASSPHRASE` and raises its timeout, since the
+  vault and package CLIs each pay a real KDF.
+- README's security model rewritten: what is encrypted, and what is explicitly
+  not protected.
+
+### Security
+
+- Every sealed object is bound to a context string, so a ciphertext cannot be
+  moved between records, identities, modalities, or recipients. A moved envelope
+  fails authentication instead of decrypting into the wrong slot.
+- Authentication failures are uniform: modified ciphertext, wrong key, and wrong
+  context are indistinguishable to the verifier and reported identically.
+- Keyring iteration counts are validated on read, so a tampered header cannot
+  request a cheap derivation.
+- Ciphertext length no longer reveals plaintext length beyond a 256-byte bucket.
+- Digest comparison is constant-time.
+- **Unchanged:** the package `signature` field is still a shared-secret hash, not
+  a digital signature. It detects alteration; it does not prove origin.
+- **Unchanged:** BSR2 is unreviewed research crypto. Upstream's `SECURITY.md`
+  says not to use it as the sole protection for credentials, identity records, or
+  recovery secrets. That caveat is inherited, not softened.
+
+### Migration
+
+- Legacy plaintext **vaults** load and are migrated to sealed storage on first
+  write.
+- Legacy plaintext **templates** load, flagged
+  `storage_protection: unprotected_legacy_plaintext`, and are re-sealed on next
+  write.
+- Pre-BSR2 **packages are refused**, not opened. Their payloads were never
+  encrypted and there is no key to recover; they must be re-created.
+- Expect roughly a minute per passphrase unlock, and about three minutes for
+  `init` (it derives both the passphrase and recovery wrappers). The KDF is slow
+  on purpose; this is not a hang.
+- **Losing both the passphrase and the recovery code is unrecoverable by
+  design.**
+
 ## [0.6.0-beta] - 2026-08-02
 
 Video FaceID, with liveness as an enforced gate. Still zero dependencies: the
