@@ -1,7 +1,7 @@
 [project]
 name = "brisart-identity-tools"
-version = "0.6.0b0"
-description = "Dependency-free local identity tooling: a plaintext record vault, local biometric verification, and identity-bound packages."
+version = "0.7.0b0"
+description = "Dependency-free local identity tooling: a BSR2-encrypted record vault, local biometric verification with sealed templates, and identity-bound packages."
 readme = "README.md"
 requires-python = ">=3.9"
 # LICENSE points at the Brisart ecosystem licensing terms rather than embedding
@@ -29,7 +29,10 @@ Issues = "https://github.com/JasonBrisart/BrisartIdentityTools/issues"
 [tool.ruff]
 line-length = 100
 target-version = "py39"
-extend-exclude = ["__pycache__"]
+# bsr2_vendor/ holds BSR2 vendored byte-identical from upstream and pinned by
+# digest in tests/test_bsr2_vendor_integrity.py. Linting it would invite edits
+# that break that pin, so it is excluded rather than fixed.
+extend-exclude = ["__pycache__", "bsr2_vendor"]
 
 [tool.ruff.lint]
 # Rules that catch real defects. Style-only and naming rules are deliberately
@@ -66,6 +69,6 @@ ignore = [
 # Tests deliberately pass wrong types to assert on the resulting errors.
 "**/tests/*.py" = ["S101", "PLR2004"]
 # This suite bootstraps sys.path before importing the application modules so it
-# still works when run directly (python tests/test_plaintext_labid_flow.py),
-# where conftest.py is not loaded. The imports must follow that bootstrap.
-"LabID_Beta/tests/test_plaintext_labid_flow.py" = ["E402"]
+# still works when run directly (python tests/test_sealed_labid_flow.py), where
+# conftest.py is not loaded. The imports must follow that bootstrap.
+"LabID_Beta/tests/test_sealed_labid_flow.py" = ["S101", "PLR2004", "E402"]
