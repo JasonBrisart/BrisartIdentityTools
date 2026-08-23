@@ -4,6 +4,52 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [0.8.1-beta] - 2026-08-23
+
+Two defensive bug fixes in the identity-bound package open path. Both are
+latent: the normal create-then-open flow never triggers either one. They only
+fire on a malformed or hand-edited `.ibp` — a package missing a signed field, or
+a payload that authenticates but is not valid UTF-8 — where the previous code
+raised the wrong exception type and, in `open_package`, skipped the audit event
+that every other denial records. No stored format changed and no data migration
+is required. The fixes are confined to `identity_bound_packages/package.py`.
+
+### Fixed
+
+**Identity-bound packages — verify_signature crashed on a truncated package**
+
+`verify_signature` is a boolean predicate, and 0.8.0 already hardened it to
+report a package with a missing `signature` as invalid rather than raising. But
+`_sign` reads `format`, `package_id`, `recipient_policy`, and `payload_hash` by
+direct subscript, so a package missing any of those — a truncated file or a
+hand-edited one — still raised `KeyError` out of `verify_signature`. In
+`open_package` that escaped as an uncaught `KeyError` instead of the intended
+`ValueError("Signature verification failed (package altered).")`, and skipped the
+`DENIED ... reason=signature` audit event. `verify_signature` now rejects a
+non-dict input and any package missing a signed field, returning `False` before
+`_sign` is called.
+
+**Identity-bound packages — a non-UTF-8 payload escaped the open pipeline**
+
+In `open_package`, the payload was decrypted inside the guarded block but decoded
+to text outside it, so an authenticated-but-non-UTF-8 payload surfaced as an
+uncaught `UnicodeDecodeError` instead of the pipeline's uniform
+`ValueError("Payload decryption failed (package altered).")`, and skipped the
+`DENIED ... reason=decrypt` audit event. The decode now runs inside the guarded
+block, so corruption is reported consistently and always audited.
+
+### Notes
+
+- No stored format changed. Packages, identities, and vaults written by 0.8.0
+  load unchanged; there is nothing to migrate.
+- Both fixes harden the code against corrupt and adversarial stored input. The
+  0.7.0 security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package `signature` field remains a shared-secret hash
+  rather than a digital signature, and losing both the passphrase and the
+  recovery code is unrecoverable by design.
+
+---
+
 ## [0.8.0-beta] - 2026-08-23
 
 A hardening pass over the BSR2 integration and application layers. 0.7.0 moved

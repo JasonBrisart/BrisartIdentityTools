@@ -30,7 +30,6 @@ an oversight.
 The ``signature`` field remains a shared-secret hash, not a real digital
 signature, and still should not be relied on to prove origin.
 """
-
 import json
 import secrets
 import sys
@@ -53,21 +52,23 @@ from custody import append_event, verify_chain  # noqa: E402
 from verification import verify_identity  # noqa: E402
 
 PACKAGE_DIR = Path(__file__).parent / "packages"
-
 PACKAGE_FORMAT = "IBP-0.4-BSR2"
 LEGACY_PLAINTEXT_FORMAT = "IBP-BETA-0.3"
-
 CONTENT_KEY_BYTES = 32
 
 # Demo shared secret used for the prototype "signature".
 # In a real system this would be a private signing key, never a constant.
 SIGNER_SECRET = "ARCHIVE-LAB-DEMO"
 
+# The non-secret fields _sign() covers. verify_signature() checks their presence
+# before signing so a truncated package is reported invalid rather than raising
+# KeyError out of a function whose contract is to return a boolean.
+_REQUIRED_SIGNED_FIELDS = ("format", "package_id", "recipient_policy", "payload_hash")
+
 
 # ---------------------------------------------------------------------------
 # Signature (prototype integrity check, NOT a real digital signature)
 # ---------------------------------------------------------------------------
-
 def _sign(package: dict) -> str:
     core = {
         "format": package["format"],
@@ -84,13 +85,21 @@ def _sign(package: dict) -> str:
 
 
 def verify_signature(package: dict) -> bool:
+    # A truncated or hand-edited package can be missing one of the signed
+    # fields. _sign() subscripts them directly, so guard their presence here
+    # first: a malformed package is "not verified", not a KeyError raised out of
+    # a boolean predicate (and, in open_package, not an uncaught crash that
+    # bypasses the DENIED audit event).
+    if not isinstance(package, dict):
+        return False
+    if any(key not in package for key in _REQUIRED_SIGNED_FIELDS):
+        return False
     return digests_equal(_sign(package), package.get("signature"))
 
 
 # ---------------------------------------------------------------------------
 # Recipient policy (multi-recipient support)
 # ---------------------------------------------------------------------------
-
 def identity_authorized(package: dict, identity) -> bool:
     """
     Supports policy modes:
@@ -110,7 +119,6 @@ def identity_authorized(package: dict, identity) -> bool:
 # ---------------------------------------------------------------------------
 # Content key wrapping
 # ---------------------------------------------------------------------------
-
 def _wrap_content_key(
     master_key: bytes, package_id: str, identity_id: str, content_key: bytes
 ) -> dict:
@@ -137,7 +145,6 @@ def _unwrap_content_key(
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
-
 def create_package(recipients, message: str, actor: str = "system",
                     location: str = "origin", mode: str = "ANY",
                     required: int = 1, unlocked_identities=None) -> str:
@@ -155,34 +162,27 @@ def create_package(recipients, message: str, actor: str = "system",
     """
     if isinstance(recipients, str):
         recipients = [recipients]
-
     if not isinstance(message, str):
         raise ValueError("message must be a string.")
-
     if not recipients:
         # An empty recipient list produced a package that no identity could
         # ever open, with no error at creation time.
         raise ValueError("at least one recipient identity_id is required.")
-
     if len(set(recipients)) != len(recipients):
         raise ValueError("recipient identity_id values must be unique.")
-
     if mode not in ("ANY", "ALL", "THRESHOLD"):
         raise ValueError(
             "mode must be one of ANY, ALL, or THRESHOLD."
         )
-
     if mode == "THRESHOLD" and not 1 <= required <= len(recipients):
         raise ValueError(
             "required must be between 1 and the recipient count."
         )
-
     if not unlocked_identities:
         raise ValueError(
             "unlocked_identities is required: an encrypted package needs each "
             "recipient's master key to wrap the content key."
         )
-
     by_id = {}
     for candidate in unlocked_identities:
         if not candidate.is_unlocked:
@@ -191,33 +191,27 @@ def create_package(recipients, message: str, actor: str = "system",
                 "creating a package."
             )
         by_id[candidate.identity_id] = candidate
-
     missing = [rid for rid in recipients if rid not in by_id]
     if missing:
         raise ValueError(
             "no unlocked identity supplied for recipients: "
             f"{', '.join(missing)}"
         )
-
     package_id = str(uuid.uuid4())
     payload_bytes = message.encode("utf-8")
-
     content_key = secrets.token_bytes(CONTENT_KEY_BYTES)
-
     sealed_payload = _envelope.seal_bytes(
         content_key,
         payload_bytes,
         package_context(package_id),
         new_generator("ibp-payload"),
     )
-
     key_slots = {
         rid: _wrap_content_key(
             by_id[rid].master_key, package_id, rid, content_key
         )
         for rid in recipients
     }
-
     package = {
         "format": PACKAGE_FORMAT,
         "package_id": package_id,
@@ -237,9 +231,7 @@ def create_package(recipients, message: str, actor: str = "system",
         "custody_chain": [],
     }
     package["signature"] = _sign(package)
-
     append_event(package, "PACKAGE_CREATED", actor, location)
-
     PACKAGE_DIR.mkdir(parents=True, exist_ok=True)
     out = PACKAGE_DIR / f"{package_id}.ibp"
     save_package(package, out)
@@ -253,7 +245,6 @@ def create_package(recipients, message: str, actor: str = "system",
 # ---------------------------------------------------------------------------
 # Load / Save
 # ---------------------------------------------------------------------------
-
 def load_package(filepath: str) -> dict:
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -272,7 +263,6 @@ def is_encrypted_package(package: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Transfer (records a custody handoff)
 # ---------------------------------------------------------------------------
-
 def transfer_package(filepath: str, actor: str, location: str) -> None:
     package = load_package(filepath)
     append_event(package, "TRANSFERRED", actor, location)
@@ -284,7 +274,6 @@ def transfer_package(filepath: str, actor: str, location: str) -> None:
 # ---------------------------------------------------------------------------
 # Open
 # ---------------------------------------------------------------------------
-
 def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
                   actor: Optional[str] = None,
                   location: str = "open-station",
@@ -300,35 +289,28 @@ def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
     package = load_package(filepath)
     pid = package["package_id"]
     actor = actor or identity.name
-
     if package.get("format") == LEGACY_PLAINTEXT_FORMAT:
         audit_event(f"DENIED package={pid} reason=legacy_plaintext actor={actor}")
         raise ValueError(
             "This package uses the pre-BSR2 plaintext format. Re-create it with "
             "the current version; its payload was never encrypted."
         )
-
     if not is_encrypted_package(package):
         audit_event(f"DENIED package={pid} reason=missing_payload actor={actor}")
         raise ValueError("Package has no sealed payload.")
-
     if not verify_signature(package):
         audit_event(f"DENIED package={pid} reason=signature actor={actor}")
         raise ValueError("Signature verification failed (package altered).")
-
     if not verify_chain(package):
         audit_event(f"DENIED package={pid} reason=custody actor={actor}")
         raise ValueError("Custody chain is broken or tampered with.")
-
     if not identity_authorized(package, identity):
         audit_event(f"DENIED package={pid} reason=unauthorized actor={actor}")
         raise PermissionError("This identity is not an authorized recipient.")
-
     slot = (package.get("key_slots") or {}).get(identity.identity_id)
     if slot is None:
         audit_event(f"DENIED package={pid} reason=no_key_slot actor={actor}")
         raise PermissionError("No key slot for this identity in this package.")
-
     if not verify_identity(
         identity,
         passphrase,
@@ -338,7 +320,6 @@ def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
     ):
         audit_event(f"DENIED package={pid} reason=factors actor={actor}")
         raise PermissionError("Identity factor verification failed.")
-
     try:
         content_key = _unwrap_content_key(
             identity.master_key, pid, identity.identity_id, slot
@@ -346,21 +327,21 @@ def open_package(filepath: str, identity, passphrase: str, voice_phrase: str,
         plaintext_bytes = _envelope.open_bytes(
             content_key, package["sealed_payload"], package_context(pid)
         )
+        # Decode inside the guarded block: an authenticated-but-non-UTF-8 payload
+        # is corruption and must surface as the same clean ValueError -- and hit
+        # the same DENIED audit event -- as any other decrypt failure, rather
+        # than escaping as an uncaught UnicodeDecodeError.
+        plaintext = plaintext_bytes.decode("utf-8")
     except Exception as exc:
         audit_event(f"DENIED package={pid} reason=decrypt actor={actor}")
         raise ValueError("Payload decryption failed (package altered).") from exc
-
-    plaintext = plaintext_bytes.decode("utf-8")
-
     if not digests_equal(
         hash_bytes(plaintext_bytes),
         package.get("payload_hash"),
     ):
         audit_event(f"DENIED package={pid} reason=integrity actor={actor}")
         raise ValueError("Payload integrity check failed.")
-
     append_event(package, "PACKAGE_OPENED", actor, location)
     save_package(package, filepath)
     audit_event(f"OPENED package={pid} actor={actor} @ {location}")
-
     return plaintext
