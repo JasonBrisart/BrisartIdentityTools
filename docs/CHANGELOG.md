@@ -4,6 +4,43 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [0.8.2-beta] - 2026-08-23
+
+One more defensive bug fix in the identity-bound package open path, in the same
+vein as 0.8.1: a malformed custody chain crashed a boolean validator instead of
+being reported as invalid. Latent — the normal create-then-open flow never
+triggers it. It only fires on a hand-edited `.ibp`. No stored format changed and
+no data migration is required. The fix is confined to
+`identity_bound_packages/custody.py`.
+
+### Fixed
+
+**Identity-bound packages — verify_chain crashed on a non-list custody chain**
+
+`verify_chain` is a boolean predicate, and 0.4.0 already hardened it so a
+truncated custody event returns `False` rather than raising `KeyError`. But it
+still iterated `custody_chain` without checking it is a list, so a hand-edited
+package carrying `"custody_chain": 123` (or any non-iterable) raised `TypeError`
+straight out of the function. Because the package `signature` does not cover
+`custody_chain`, `verify_signature` passes first, so in `open_package` that
+`TypeError` escaped uncaught instead of producing the uniform
+`ValueError("Custody chain is broken or tampered with.")`, and skipped the
+`DENIED ... reason=custody` audit event that every other denial records.
+`verify_chain` now rejects a non-dict package, a non-list chain, and a non-object
+event, returning `False` before iterating.
+
+### Notes
+
+- No stored format changed. Packages, identities, and vaults written by 0.8.1
+  load unchanged; there is nothing to migrate.
+- This hardens the code against corrupt and adversarial stored input. The 0.7.0
+  security caveats are unchanged and still apply: BSR2 is unreviewed research
+  crypto, the package `signature` field remains a shared-secret hash rather than
+  a digital signature, and losing both the passphrase and the recovery code is
+  unrecoverable by design.
+  
+---
+
 ## [0.8.1-beta] - 2026-08-23
 
 Two defensive bug fixes in the identity-bound package open path. Both are

@@ -2,6 +2,7 @@
 custody.py
 ----------
 Chain-of-custody ledger for the Identity-Bound Package BETA prototype.
+
 Each event is hash-linked to the previous one (a tiny hash chain), so
 accidental edits or reordering can be detected by verify_chain().
 
@@ -33,7 +34,6 @@ def append_event(package: dict, action: str, actor: str, location: str) -> None:
     """Append a new hash-linked custody event to the package."""
     chain = package.setdefault("custody_chain", [])
     previous_hash = chain[-1]["event_hash"] if chain else None
-
     event = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "action": action,
@@ -47,8 +47,22 @@ def append_event(package: dict, action: str, actor: str, location: str) -> None:
 
 def verify_chain(package: dict) -> bool:
     """Return True if the custody chain is internally consistent."""
+    if not isinstance(package, dict):
+        return False
+    chain = package.get("custody_chain", [])
+    # A hand-edited package can carry a custody_chain that is not a list (an
+    # int, a string, an object). Iterating it would raise out of a function
+    # whose contract is "return True/False" -- and, in open_package, escape the
+    # DENIED audit event and the uniform ValueError. A non-list chain is not a
+    # valid chain.
+    if not isinstance(chain, list):
+        return False
     previous = None
-    for event in package.get("custody_chain", []):
+    for event in chain:
+        # Likewise, a non-object event ("timestamp" not in 123 raises TypeError)
+        # is malformed, not valid.
+        if not isinstance(event, dict):
+            return False
         required = ("timestamp", "action", "actor", "location",
                     "previous_hash", "event_hash")
         if any(field not in event for field in required):
