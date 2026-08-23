@@ -26,7 +26,6 @@ Consequences that follow from this, and are deliberate:
 * Losing both the passphrase and the recovery code is unrecoverable. There is no
   third path by design.
 """
-
 import secrets
 import unicodedata
 from typing import Optional
@@ -52,7 +51,6 @@ from brisart_bsr2.vendor import (
 
 MASTER_KEY_BYTES = 32
 KDF_SALT_BYTES = 32
-
 # BSR2 enforces a 10,000 floor and defaults to 120,000. At roughly 7 ms per
 # iteration in pure Python, the floor already costs about 70 seconds per
 # derivation. That is the value used here: it is the strongest setting BSR2
@@ -61,18 +59,18 @@ KDF_SALT_BYTES = 32
 # cost is paid once. Recorded per keyring so it can be raised later without
 # invalidating existing keyrings.
 KDF_ITERATIONS = 10_000
-
+# Upper bound mirroring brisart_bsr2.factors.MAXIMUM_ITERATIONS. Legitimate
+# keyrings sit at 10,000..120,000; a tampered header carrying an astronomical
+# count would otherwise make an unlock derive for years before it can fail.
+MAXIMUM_KDF_ITERATIONS = 1_000_000
 RECOVERY_CODE_GROUPS = 8
 RECOVERY_CODE_GROUP_SIZE = 5
 # Crockford base32 without I, L, O, U: no ambiguity when transcribed by hand.
 _RECOVERY_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-
 # The characters excluded from the alphabet, mapped to their visual equivalents,
 # so a code transcribed by hand still resolves.
 _CONFUSABLE_CHARACTERS = {"I": "1", "L": "1", "O": "0", "U": "V"}
-
 KEYRING_FORMAT = "brisart-identity-tools/bsr2-keyring/v1"
-
 _WRAPPER_PASSPHRASE = "passphrase"
 _WRAPPER_RECOVERY = "recovery"
 
@@ -110,7 +108,6 @@ def _normalize_recovery_code(code: str) -> str:
     """
     if not isinstance(code, str):
         raise Bsr2IntegrationError("recovery code must be a string.")
-
     cleaned = []
     for character in code.strip().upper():
         if character in "- \t\r\n":
@@ -121,16 +118,13 @@ def _normalize_recovery_code(code: str) -> str:
                 "recovery code contains characters outside its alphabet."
             )
         cleaned.append(folded)
-
     normalized = "".join(cleaned)
     expected = RECOVERY_CODE_GROUPS * RECOVERY_CODE_GROUP_SIZE
-
     if len(normalized) != expected:
         raise Bsr2IntegrationError(
             f"recovery code must contain {expected} characters, "
             f"got {len(normalized)}."
         )
-
     return normalized
 
 
@@ -173,7 +167,6 @@ class Keyring:
         self._master_key = None
 
     # ---------------------------------------------------------------- creation
-
     @classmethod
     def create(
         cls,
@@ -189,32 +182,30 @@ class Keyring:
         """
         passphrase_text = _normalize_passphrase(passphrase)
         iterations = _require_int(iterations, "iterations")
-
         if iterations < 10_000:
             # Mirrors BSR2's own floor. Stated explicitly so the failure names
             # the real constraint rather than surfacing a primitive error.
             raise Bsr2IntegrationError(
                 "iteration count is below the BSR2 research minimum of 10,000."
             )
-
+        if iterations > MAXIMUM_KDF_ITERATIONS:
+            raise Bsr2IntegrationError(
+                f"iteration count is above the {MAXIMUM_KDF_ITERATIONS} maximum."
+            )
         if recovery_code is None:
             recovery_text = generate_recovery_code()
         else:
             recovery_text = _normalize_recovery_code(recovery_code)
-
         master_key = secrets.token_bytes(MASTER_KEY_BYTES)
         rng = new_generator("keyring-create")
-
         passphrase_salt = secrets.token_bytes(KDF_SALT_BYTES)
         recovery_salt = secrets.token_bytes(KDF_SALT_BYTES)
-
         passphrase_key = _derive_wrapping_key(
             passphrase_text, passphrase_salt, iterations
         )
         recovery_key = _derive_wrapping_key(
             recovery_text, recovery_salt, iterations
         )
-
         state = {
             "format": KEYRING_FORMAT,
             "kdf": "BSR2/derive_password_key",
@@ -239,13 +230,11 @@ class Keyring:
             },
             "master_key_check": hex_encode(cls._check_value(master_key)),
         }
-
         keyring = cls(state)
         keyring._master_key = master_key
         return keyring, format_recovery_code(recovery_text)
 
     # -------------------------------------------------------------- validation
-
     @staticmethod
     def _validate(state: dict) -> dict:
         if not isinstance(state, dict):
@@ -254,7 +243,6 @@ class Keyring:
             raise KeyringFormatError("unsupported keyring format.")
         if state.get("kdf") != "BSR2/derive_password_key":
             raise KeyringFormatError("unsupported keyring KDF.")
-
         iterations = _require_int(state.get("iterations"), "iterations")
         if iterations < 10_000:
             # A tampered keyring header could otherwise request a cheap
@@ -262,14 +250,18 @@ class Keyring:
             raise KeyringFormatError(
                 "keyring iteration count is below the BSR2 minimum."
             )
-
+        if iterations > MAXIMUM_KDF_ITERATIONS:
+            # The opposite tamper: an astronomical count that turns unlock into
+            # a years-long hang before authentication can fail.
+            raise KeyringFormatError(
+                "keyring iteration count is above the supported maximum."
+            )
         for wrapper in (_WRAPPER_PASSPHRASE, _WRAPPER_RECOVERY):
             section = state.get(wrapper)
             if not isinstance(section, dict):
                 raise KeyringFormatError(
                     f"keyring {wrapper} section must be an object."
                 )
-
             salt_text = section.get("salt")
             if not isinstance(salt_text, str):
                 raise KeyringFormatError(
@@ -285,12 +277,10 @@ class Keyring:
                 raise KeyringFormatError(
                     f"keyring {wrapper} salt has an invalid length."
                 )
-
             if not is_envelope(section.get("wrapped_master_key")):
                 raise KeyringFormatError(
                     f"keyring {wrapper} wrapper is not a BSR2 envelope."
                 )
-
         check = state.get("master_key_check")
         if not isinstance(check, str):
             raise KeyringFormatError("keyring master key check must be text.")
@@ -303,7 +293,6 @@ class Keyring:
             raise KeyringFormatError(
                 "keyring master key check is not valid hexadecimal."
             ) from exc
-
         return state
 
     @staticmethod
@@ -322,14 +311,12 @@ class Keyring:
         )
 
     # ------------------------------------------------------------------ unlock
-
     def _unwrap(self, wrapper: str, secret_text: str) -> bytes:
         section = self._state[wrapper]
         salt = hex_decode(section["salt"])
         wrapping_key = _derive_wrapping_key(
             secret_text, salt, self._state["iterations"]
         )
-
         try:
             master_key = open_bytes(
                 wrapping_key,
@@ -342,17 +329,14 @@ class Keyring:
             raise KeyringAuthenticationError(
                 "unlock failed: incorrect secret or modified keyring."
             ) from exc
-
         if len(master_key) != MASTER_KEY_BYTES:
             raise KeyringFormatError("unwrapped master key has an invalid length.")
-
         if not constant_time_equal(
             self._check_value(master_key), hex_decode(self._state["master_key_check"])
         ):
             raise KeyringFormatError(
                 "unwrapped master key does not match the keyring check value."
             )
-
         return master_key
 
     def unlock_with_passphrase(self, passphrase: str) -> bytes:
@@ -392,7 +376,6 @@ class Keyring:
         self._master_key = None
 
     # ----------------------------------------------------------- modification
-
     def change_passphrase(self, new_passphrase: str) -> None:
         """Re-wrap the master key under a new passphrase.
 
@@ -403,14 +386,12 @@ class Keyring:
             raise KeyringLockedError(
                 "unlock the keyring before changing its passphrase."
             )
-
         passphrase_text = _normalize_passphrase(new_passphrase)
         salt = secrets.token_bytes(KDF_SALT_BYTES)
         wrapping_key = _derive_wrapping_key(
             passphrase_text, salt, self._state["iterations"]
         )
         rng = new_generator("keyring-rewrap")
-
         self._state["passphrase"] = {
             "salt": hex_encode(salt),
             "wrapped_master_key": seal_bytes(
@@ -430,14 +411,12 @@ class Keyring:
             raise KeyringLockedError(
                 "unlock the keyring before rotating its recovery code."
             )
-
         recovery_text = generate_recovery_code()
         salt = secrets.token_bytes(KDF_SALT_BYTES)
         wrapping_key = _derive_wrapping_key(
             recovery_text, salt, self._state["iterations"]
         )
         rng = new_generator("keyring-rotate")
-
         self._state["recovery"] = {
             "salt": hex_encode(salt),
             "wrapped_master_key": seal_bytes(
@@ -447,11 +426,9 @@ class Keyring:
                 rng,
             ),
         }
-
         return format_recovery_code(recovery_text)
 
     # ------------------------------------------------------------------ export
-
     def to_state(self) -> dict:
         """Return the storable keyring state.
 

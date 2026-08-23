@@ -37,7 +37,6 @@ Encoded forms::
     bsr2$derive_password_key$iterations=10000$<hex salt>$<hex digest>
     bsr2$keyed_mac$<factor name>$<hex digest>
 """
-
 from brisart_bsr2.errors import Bsr2IntegrationError
 from brisart_bsr2.vendor import (
     BrisartPrimitiveError,
@@ -52,15 +51,18 @@ from brisart_bsr2.vendor import (
 )
 
 PREFIX = "bsr2"
-
 KDF_ALGORITHM = "derive_password_key"
 MAC_ALGORITHM = "keyed_mac"
-
 SALT_BYTES = 32
 DIGEST_BYTES = 32
 ITERATIONS = 10_000
 MINIMUM_ITERATIONS = 10_000
-
+# Legitimate factor hashes use 10,000 (the BSR2 floor) up to a few times BSR2's
+# 120,000 default. This ceiling sits far above any real setting yet bounds the
+# work a tampered hash can demand: without it, a stored value carrying e.g.
+# iterations=100_000_000_000 makes verify_factor run the KDF for years before
+# the digest can even mismatch. An over-large count is treated as malformed.
+MAXIMUM_ITERATIONS = 1_000_000
 _KDF_FIELD_COUNT = 5
 _MAC_FIELD_COUNT = 4
 
@@ -68,8 +70,6 @@ _MAC_FIELD_COUNT = 4
 # --------------------------------------------------------------------------
 # Low-entropy secrets: expensive derivation
 # --------------------------------------------------------------------------
-
-
 def hash_factor(secret: str, iterations: int = ITERATIONS) -> str:
     """Hash a low-entropy secret with a fresh random salt.
 
@@ -85,12 +85,14 @@ def hash_factor(secret: str, iterations: int = ITERATIONS) -> str:
         raise Bsr2IntegrationError(
             f"iteration count is below the {MINIMUM_ITERATIONS} minimum."
         )
-
+    if iterations > MAXIMUM_ITERATIONS:
+        raise Bsr2IntegrationError(
+            f"iteration count is above the {MAXIMUM_ITERATIONS} maximum."
+        )
     salt = system_entropy(SALT_BYTES)
     digest = derive_password_key(
         secret, salt, iterations=iterations, output_bytes=DIGEST_BYTES
     )
-
     return "$".join(
         (
             PREFIX,
@@ -105,13 +107,10 @@ def hash_factor(secret: str, iterations: int = ITERATIONS) -> str:
 def _parse_kdf(encoded: str) -> dict:
     if not isinstance(encoded, str):
         raise Bsr2IntegrationError("factor hash must be a string.")
-
     fields = encoded.split("$")
     if len(fields) != _KDF_FIELD_COUNT:
         raise Bsr2IntegrationError("factor hash is malformed.")
-
     prefix, algorithm, parameter_text, salt_text, digest_text = fields
-
     if prefix != PREFIX:
         raise Bsr2IntegrationError("factor hash is not a BSR2 factor hash.")
     if algorithm != KDF_ALGORITHM:
@@ -120,31 +119,32 @@ def _parse_kdf(encoded: str) -> dict:
         )
     if not parameter_text.startswith("iterations="):
         raise Bsr2IntegrationError("factor hash parameters are malformed.")
-
     try:
         iterations = int(parameter_text[len("iterations="):])
     except ValueError as exc:
         raise Bsr2IntegrationError(
             "factor hash iteration count is not an integer."
         ) from exc
-
     if iterations < MINIMUM_ITERATIONS:
         # A tampered hash string could otherwise request a cheap verification.
         raise Bsr2IntegrationError(
             "factor hash iteration count is below the supported minimum."
         )
-
+    if iterations > MAXIMUM_ITERATIONS:
+        # The opposite tamper: an astronomical count that makes verify_factor
+        # run the KDF for years before the digest can mismatch.
+        raise Bsr2IntegrationError(
+            "factor hash iteration count is above the supported maximum."
+        )
     try:
         salt = hex_decode(salt_text)
         digest = hex_decode(digest_text)
     except BrisartPrimitiveError as exc:
         raise Bsr2IntegrationError("factor hash encoding is invalid.") from exc
-
     if len(salt) != SALT_BYTES:
         raise Bsr2IntegrationError("factor hash salt has an invalid length.")
     if len(digest) != DIGEST_BYTES:
         raise Bsr2IntegrationError("factor hash digest has an invalid length.")
-
     return {"iterations": iterations, "salt": salt, "digest": digest}
 
 
@@ -156,12 +156,10 @@ def verify_factor(secret, encoded: str) -> bool:
     """
     if not isinstance(secret, str) or not secret:
         return False
-
     try:
         parsed = _parse_kdf(encoded)
     except Bsr2IntegrationError:
         return False
-
     try:
         calculated = derive_password_key(
             secret,
@@ -171,15 +169,12 @@ def verify_factor(secret, encoded: str) -> bool:
         )
     except BrisartPrimitiveError:
         return False
-
     return constant_time_equal(calculated, parsed["digest"])
 
 
 # --------------------------------------------------------------------------
 # High-entropy secrets: keyed digest under the master key
 # --------------------------------------------------------------------------
-
-
 def _factor_mac(master_key: bytes, factor_name: str, value: str) -> bytes:
     if not isinstance(master_key, (bytes, bytearray)) or len(master_key) < 32:
         raise Bsr2IntegrationError("master key must be at least 32 bytes.")
@@ -191,7 +186,6 @@ def _factor_mac(master_key: bytes, factor_name: str, value: str) -> bytes:
         raise Bsr2IntegrationError("factor name cannot contain '$'.")
     if not isinstance(value, str):
         raise Bsr2IntegrationError("factor value must be a string.")
-
     # A distinct subkey per factor name means a template bound as "face" cannot
     # be replayed into the "fingerprint" slot.
     subkey = derive_subkey(
@@ -200,11 +194,9 @@ def _factor_mac(master_key: bytes, factor_name: str, value: str) -> bytes:
         b"BrisartIdentityTools/factor/v1",
         32,
     )
-
     # Framed so that the name and value cannot be shifted across the boundary
     # between them to produce a colliding MAC input.
     message = frame(factor_name.encode("utf-8")) + frame(value.encode("utf-8"))
-
     return keyed_mac(subkey, message, DIGEST_BYTES)
 
 
@@ -222,13 +214,10 @@ def bind_factor(master_key: bytes, factor_name: str, value: str) -> str:
 def _parse_mac(encoded: str) -> dict:
     if not isinstance(encoded, str):
         raise Bsr2IntegrationError("bound factor must be a string.")
-
     fields = encoded.split("$")
     if len(fields) != _MAC_FIELD_COUNT:
         raise Bsr2IntegrationError("bound factor is malformed.")
-
     prefix, algorithm, factor_name, digest_text = fields
-
     if prefix != PREFIX:
         raise Bsr2IntegrationError("bound factor is not a BSR2 record.")
     if algorithm != MAC_ALGORITHM:
@@ -237,15 +226,12 @@ def _parse_mac(encoded: str) -> dict:
         )
     if not factor_name:
         raise Bsr2IntegrationError("bound factor name is empty.")
-
     try:
         digest = hex_decode(digest_text)
     except BrisartPrimitiveError as exc:
         raise Bsr2IntegrationError("bound factor encoding is invalid.") from exc
-
     if len(digest) != DIGEST_BYTES:
         raise Bsr2IntegrationError("bound factor digest has an invalid length.")
-
     return {"factor_name": factor_name, "digest": digest}
 
 
@@ -260,30 +246,24 @@ def verify_bound_factor(
     """
     if not isinstance(value, str):
         return False
-
     try:
         parsed = _parse_mac(encoded)
     except Bsr2IntegrationError:
         return False
-
     if not constant_time_equal(
         parsed["factor_name"].encode("utf-8"), factor_name.encode("utf-8")
     ):
         return False
-
     try:
         calculated = _factor_mac(master_key, factor_name, value)
     except (Bsr2IntegrationError, BrisartPrimitiveError):
         return False
-
     return constant_time_equal(calculated, parsed["digest"])
 
 
 # --------------------------------------------------------------------------
 # Inspection
 # --------------------------------------------------------------------------
-
-
 def is_factor_hash(value) -> bool:
     """Report whether ``value`` is a BSR2 KDF factor hash."""
     if not isinstance(value, str):
@@ -330,12 +310,11 @@ __all__ = [
     "DIGEST_BYTES",
     "ITERATIONS",
     "MINIMUM_ITERATIONS",
+    "MAXIMUM_ITERATIONS",
     "bind_factor",
     "hash_factor",
     "is_bound_factor",
     "is_factor_hash",
     "is_legacy_digest",
     "needs_rehash",
-    "verify_bound_factor",
-    "verify_factor",
-]
+    "verify_bound_

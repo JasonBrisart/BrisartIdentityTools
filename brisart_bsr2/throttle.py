@@ -9,7 +9,7 @@ State is persisted by the caller rather than held in memory. An in-memory counte
 resets when the process restarts, which an attacker controls for free by killing
 the process between guesses.
 """
-
+import math
 import time
 
 from brisart_bsr2.errors import Bsr2IntegrationError
@@ -54,7 +54,6 @@ class AttemptLimiter:
             raise Bsr2IntegrationError("delays cannot be negative.")
         if lockout_seconds < 0:
             raise Bsr2IntegrationError("lockout_seconds cannot be negative.")
-
         self.max_attempts = max_attempts
         self.base_delay_seconds = float(base_delay_seconds)
         self.max_delay_seconds = float(max_delay_seconds)
@@ -75,40 +74,49 @@ class AttemptLimiter:
             return self.new_state()
         if not isinstance(state, dict):
             raise Bsr2IntegrationError("limiter state must be an object.")
-
         normalized = self.new_state()
-
         for field, default in normalized.items():
             value = state.get(field, default)
             # A corrupted or hostile field reads as "no credit earned" rather
             # than as permission to skip the limiter.
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 continue
+            # NaN and +/-Infinity are floats and slip past a plain "< 0" guard.
+            # A NaN locked_until makes "locked_until > now" false (silent bypass)
+            # and int(NaN) later raises ValueError out of a function whose
+            # contract is to raise AttemptLockedOut or return state. Treat a
+            # non-finite field as corrupt, i.e. as no credit earned.
+            if not math.isfinite(value):
+                continue
             if value < 0:
                 continue
             normalized[field] = value
-
         return normalized
+
+    # Cap the exponent well past where the delay saturates at max_delay_seconds.
+    # A persisted failed_attempts is attacker-influenced, and 2 ** (n - 1) is an
+    # unbounded bignum computed before the min() clamp, so a huge stored count
+    # would otherwise burn seconds building a number that is immediately thrown
+    # away. 2 ** 64 seconds already dwarfs any real max_delay_seconds.
+    _MAX_BACKOFF_EXPONENT = 64
 
     def _required_delay(self, failed_attempts: int) -> float:
         if failed_attempts < 1:
             return 0.0
-        delay = self.base_delay_seconds * (2 ** (failed_attempts - 1))
+        exponent = min(failed_attempts - 1, self._MAX_BACKOFF_EXPONENT)
+        delay = self.base_delay_seconds * (2 ** exponent)
         return min(delay, self.max_delay_seconds)
 
     def check(self, state) -> dict:
         """Raise :class:`AttemptLockedOut` if an attempt is not allowed yet."""
         current = self._normalize(state)
         now = self._time()
-
         if current["locked_until"] > now:
             raise AttemptLockedOut(
                 "too many failed attempts; locked out.",
                 round(current["locked_until"] - now, 3),
             )
-
         required = self._required_delay(int(current["failed_attempts"]))
-
         if required > 0.0:
             elapsed = now - current["last_failure_at"]
             if elapsed < required:
@@ -116,20 +124,16 @@ class AttemptLimiter:
                     "attempt rejected; backoff period has not elapsed.",
                     round(required - elapsed, 3),
                 )
-
         return current
 
     def record_failure(self, state) -> dict:
         """Return updated state after a failed attempt."""
         current = self._normalize(state)
         now = self._time()
-
         current["failed_attempts"] = int(current["failed_attempts"]) + 1
         current["last_failure_at"] = now
-
         if current["failed_attempts"] >= self.max_attempts:
             current["locked_until"] = now + self.lockout_seconds
-
         return current
 
     def record_success(self, state) -> dict:
@@ -148,7 +152,6 @@ class AttemptLimiter:
             if required
             else 0.0
         )
-
         return {
             "failed_attempts": int(current["failed_attempts"]),
             "max_attempts": self.max_attempts,

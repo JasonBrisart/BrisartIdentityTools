@@ -25,7 +25,6 @@ keyring. That is intentional. Stealing an identity file no longer lets an
 attacker test candidate voice phrases or templates offline, which the previous
 unsalted-SHA-256 version allowed.
 """
-
 import json
 import secrets
 import sys
@@ -42,7 +41,6 @@ from brisart_bsr2.keyring import MASTER_KEY_BYTES, Keyring  # noqa: E402
 from crypto import bind_factor  # noqa: E402
 
 IDENTITY_DIR = Path(__file__).parent / "identities"
-
 IDENTITY_FORMAT = "brisart-identity-tools/ibp-identity/v2"
 
 FACTOR_VOICE = "voice"
@@ -61,7 +59,6 @@ class IdentityProfile:
     def __init__(self, data: dict):
         if not isinstance(data, dict):
             raise Bsr2IntegrationError("identity data must be an object.")
-
         fmt = data.get("format")
         if fmt != IDENTITY_FORMAT:
             # Legacy v1 identities stored bare SHA-256 factor hashes. They cannot
@@ -72,21 +69,24 @@ class IdentityProfile:
                 f"{fmt!r}. Identities created before BSR2 must be re-enrolled; "
                 "their factor values cannot be recovered from the old hashes."
             )
-
+        # A malformed file missing these fields used to raise a bare KeyError out
+        # of the constructor. Report it as an integration error like every other
+        # structural problem here, so callers only ever catch Bsr2IntegrationError.
+        if "identity_id" not in data or "name" not in data:
+            raise Bsr2IntegrationError(
+                "identity file is missing identity_id or name."
+            )
         self.identity_id = data["identity_id"]
         self.name = data["name"]
-
         # The keyring is parsed lazily. An identity whose master key is supplied
         # directly via adopt_master_key() never needs one, which is how the test
         # suite and any caller that already unlocked elsewhere avoid paying for a
         # passphrase derivation. Validating it here would reject those outright.
         self._keyring_state = data.get("keyring")
         self._keyring = None
-
         factors = data.get("factors")
         if not isinstance(factors, dict):
             raise Bsr2IntegrationError("identity factors must be an object.")
-
         self.factors = factors
         self._master_key = None
 
@@ -101,14 +101,12 @@ class IdentityProfile:
         return self._keyring
 
     # ----------------------------------------------------------------- loading
-
     @classmethod
     def load(cls, filepath: str) -> "IdentityProfile":
         with open(filepath, "r", encoding="utf-8") as handle:
             return cls(json.load(handle))
 
     # ------------------------------------------------------------------ unlock
-
     def unlock(self, passphrase: str) -> bytes:
         """Unlock with the passphrase. Slow by design; see the module docstring."""
         self._master_key = self._require_keyring().unlock_with_passphrase(
@@ -157,7 +155,6 @@ class IdentityProfile:
         return self._master_key
 
     # ------------------------------------------------------------------ export
-
     def to_state(self) -> dict:
         state = {
             "format": IDENTITY_FORMAT,
@@ -165,12 +162,10 @@ class IdentityProfile:
             "name": self.name,
             "factors": self.factors,
         }
-
         if self._keyring is not None:
             state["keyring"] = self._keyring.to_state()
         elif self._keyring_state is not None:
             state["keyring"] = self._keyring_state
-
         return state
 
     def save(self, filepath: str) -> None:
@@ -195,11 +190,9 @@ def build_identity_state(
     such an identity cannot be unlocked by passphrase.
     """
     identity_id = identity_id or str(uuid.uuid4())
-
     factors = {
         FACTOR_VOICE: bind_factor(master_key, FACTOR_VOICE, voice_phrase),
     }
-
     if face_template is not None:
         factors[FACTOR_FACE] = bind_factor(
             master_key, FACTOR_FACE, face_template
@@ -208,17 +201,14 @@ def build_identity_state(
         factors[FACTOR_FINGERPRINT] = bind_factor(
             master_key, FACTOR_FINGERPRINT, fingerprint_template
         )
-
     state = {
         "format": IDENTITY_FORMAT,
         "identity_id": identity_id,
         "name": name,
         "factors": factors,
     }
-
     if keyring_state is not None:
         state["keyring"] = keyring_state
-
     return state
 
 
@@ -243,9 +233,7 @@ def create_identity(
         raise Bsr2IntegrationError("identity name must be a non-empty string.")
     if not isinstance(voice_phrase, str) or not voice_phrase:
         raise Bsr2IntegrationError("voice phrase must be a non-empty string.")
-
     keyring, recovery_code = Keyring.create(passphrase)
-
     state = build_identity_state(
         name=name,
         master_key=keyring.master_key,
@@ -254,14 +242,11 @@ def create_identity(
         face_template=face_template,
         fingerprint_template=fingerprint_template,
     )
-
     directory = Path(output_dir) if output_dir else IDENTITY_DIR
     directory.mkdir(parents=True, exist_ok=True)
     out = directory / f"{state['identity_id']}.identity"
-
     with open(out, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=4, sort_keys=True)
-
     return str(out), recovery_code
 
 
@@ -273,12 +258,10 @@ if __name__ == "__main__":
     entered_name = input("Name: ")
     entered_passphrase = input("Passphrase: ")
     entered_voice = input("Voice phrase: ")
-
     print("\nDeriving keys with BSR2. This takes several minutes.\n")
     path, code = create_identity(
         entered_name, entered_passphrase, entered_voice
     )
-
     print(f"Created identity '{entered_name}'")
     print(f"  File: {path}")
     print("\n  RECOVERY CODE (write this down, it is shown only once):")

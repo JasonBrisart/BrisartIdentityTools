@@ -2,6 +2,96 @@
 
 All notable changes to BrisartIdentityTools are recorded here.
 
+---
+
+## [0.8.0-beta] - 2026-08-23
+
+A hardening pass over the BSR2 integration and application layers. 0.7.0 moved
+every stored secret behind authenticated encryption; this release makes the code
+around that encryption hold up when the values it reads back are hostile or
+corrupt rather than well-formed. Every finding shares one theme: a persisted
+value on the authentication path — limiter state, an iteration count, a stored
+record — was trusted more than a file an attacker or a disk fault can edit
+deserves. No stored format changes and no data migration is required.
+
+Nothing in `bsr2_vendor/` is touched; it remains byte-identical and pinned by
+`tests/test_bsr2_vendor_integrity.py`. Every fix lives in the integration or
+application layer. The two behaviours that could hang or crash a process were
+reproduced against the vendored primitives before and after the fix.
+
+### Security
+
+- **Attempt limiter no longer crashes or silently unlocks on corrupt state.**
+  `AttemptLimiter._normalize` treated `NaN` and `Infinity` as valid numbers,
+  because they are floats and `nan < 0` is `False`. A limiter state persisted
+  with `locked_until` set to `NaN` made `locked_until > now` evaluate `False`,
+  so a genuine lockout silently evaporated; and the subsequent
+  `int(failed_attempts)` raised an uncaught `ValueError` out of a method whose
+  contract is to raise `AttemptLockedOut` or return state, turning a corrupt
+  state file into a hard crash on the unlock path. Non-finite fields are now
+  discarded and read as fresh state, the same fail-safe already applied to
+  non-numeric fields.
+- **Attempt-limiter backoff can no longer be turned into a stall.** The backoff
+  delay was computed as `base * 2 ** (failed_attempts - 1)` before being clamped
+  to `max_delay_seconds`. Because `failed_attempts` comes from caller-persisted
+  state, a stored count in the billions built a multi-gigabit integer that was
+  then immediately discarded — a single `check()` measured at roughly 48 seconds.
+  The exponent is now capped before exponentiation, so the clamp result is
+  identical for honest input and the work is bounded regardless of the stored
+  value.
+- **KDF iteration counts are now bounded above as well as below.** 0.7.0
+  validated the 10,000-iteration floor on read, to stop a tampered header from
+  requesting a cheap derivation. It did not bound the ceiling. A stored factor
+  hash or keyring header carrying an astronomical iteration count made
+  verification or unlock run the deliberately slow KDF to completion — years of
+  work — before the digest could even be compared and fail. Factor hashes
+  (`factors.py`) and keyrings (`keyring.py`, on both the create and load paths)
+  now reject an over-maximum count as malformed at parse time, so a tampered
+  value fails fast without ever entering the KDF. The ceiling sits far above
+  BSR2's 120,000 default, so no legitimate keyring or hash is affected.
+
+### Fixed
+
+**IdentityVault — batch upserts validated values too late to stay atomic**
+
+`upsert_records` validated `kind` and `label` in its up-front pass but not
+`value`, so a non-string value slipped through to the second, mutating loop and
+raised from inside `build_plain_payload` — after earlier items in the batch had
+already been applied to the in-memory vault and with the final save skipped, the
+same failed-open, work-lost behaviour that 0.4.0 fixed for the missing-field
+case. `value` is now validated during the prepare pass, so a bad item is
+rejected before any record is mutated and the batch stays all-or-nothing.
+
+**Identity-bound packages — malformed identity files raised a bare KeyError**
+
+`IdentityProfile.__init__` read `identity_id` and `name` by direct subscript, so
+an identity file missing either field raised a raw `KeyError` out of the
+constructor, inconsistent with every other structural check in the class and
+invisible to callers catching `Bsr2IntegrationError`. A missing field is now
+reported as an integration error like every other malformed-file case.
+
+**Identity-bound packages — a non-UTF-8 payload escaped the open pipeline**
+
+In `open_package`, the payload was decrypted inside the guarded block but decoded
+to text outside it, so an authenticated-but-non-UTF-8 payload surfaced as an
+uncaught `UnicodeDecodeError` instead of the pipeline's uniform
+`ValueError("Payload decryption failed (package altered).")`, and skipped the
+`DENIED ... reason=decrypt` audit event that every other open failure records.
+The decode now runs inside the guarded block, so corruption is reported
+consistently and always audited.
+
+### Notes
+
+- No stored format changed. Vaults, identities, keyrings, templates, and
+  packages written by 0.7.0 load unchanged; there is nothing to migrate.
+- These fixes harden the code against corrupt and adversarial *stored* input.
+  The 0.7.0 security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package `signature` field remains a shared-secret hash
+  rather than a digital signature, and losing both the passphrase and the
+  recovery code is unrecoverable by design.
+
+---
+
 ## [0.7.0-beta] - 2026-08-04
 
 Encryption at rest, using real BSR2. Everything the repository previously stored
@@ -121,6 +211,8 @@ See **Changed** and **Migration** below.
 - **Losing both the passphrase and the recovery code is unrecoverable by
   design.**
 
+---
+
 ## [0.6.0-beta] - 2026-08-02
 
 Video FaceID, with liveness as an enforced gate. Still zero dependencies: the
@@ -171,6 +263,8 @@ AVI container is parsed and written by hand with `struct`.
 - CI smoke tests exercise video FaceID, the recording round trip, the photo
   replay rejection, and the static-enrollment refusal plus its override.
 
+---
+
 ## [0.5.0-beta] - 2026-08-02
 
 LabID now supports three stdlib-only biometric modalities instead of just the
@@ -208,6 +302,8 @@ original grayscale face path.
   (`0.94`), because its score geometry is tighter and should not be forced into
   the same threshold bucket.
 - CI smoke tests now exercise face PNG, voice WAV, and fingerprint PNG flows.
+
+---
 
 ## [0.4.0-beta] - 2026-08-02
 
