@@ -4,6 +4,82 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.0.2] - 2026-08-24
+
+A CI, test-runner, and tooling pass on top of 1.0.1. No shipped module's
+behavior changed — this release fixes the failing GitHub Actions workflow,
+splits the test suite into fast and slow (real-KDF) runs so CI is affordable
+again, corrects one test whose assertions did not match shipped behavior, and
+trims `pyproject.toml` down to the only thing that actually reads it. No stored
+format changed and no data migration is required.
+
+### Fixed
+
+- **GitHub Actions biometrics smoke job could never pass.** The `smoke` job's
+  biometrics steps call `python app.py enroll ...`, which unlocks a local
+  keyring via `getpass`. On CI there is no TTY, so `getpass` reads empty input
+  and `Keyring.create("")` raised `passphrase cannot be empty` on the very
+  first enroll — the job failed before exercising anything. Every
+  keyring-touching biometrics step now pipes its passphrase in on stdin, the
+  same pattern the vault steps already used. `make-samples`/`list`/`inspect`/
+  `delete` do not touch the keyring and need no passphrase.
+- **Wrong exception type asserted in `crypto/tests/test_rng.py`.** Two tests
+  asserted `generate(0, ...)` and `generate(32, b"")` raise
+  `Bsr2IntegrationError`, but `crypto/rng.py` does not wrap the vendored
+  `BrisartDRBGError` (a `ValueError`), so it surfaces unwrapped. Both tests now
+  assert `ValueError`, matching shipped behavior. (The alternative — wrapping
+  the error in `rng.py` for API consistency with the rest of the layer — was
+  considered and deferred; it would be a behavior change, not a test fix.)
+
+### Changed
+
+- **`run_tests.py` rewritten for explicit, fail-loud discovery and a fast/slow
+  split.** The tree is pure PEP 420 (no `__init__.py`) and `conftest.py` is a
+  pytest-only hook `unittest` never loads, so the old
+  `unittest discover -s . -t .` was fragile (could silently collect nothing or
+  error on import). The runner now discovers each `tests/` directory explicitly
+  with the repository root as `top_level_dir`, adds the two root-level test
+  modules by name, and **fails loudly on a collection import error instead of
+  passing with zero tests**. New flags:
+  - `python run_tests.py` — every test.
+  - `python run_tests.py --fast` — everything except the real-KDF tests.
+  - `python run_tests.py --slow` — only the real-KDF tests.
+
+  Fast/slow is filtered at the **class** level, so a module holding both fast
+  and slow classes (`test_keyring`, `test_factors`,
+  `test_label_normalization`) still runs its fast classes under `--fast`.
+- **CI workflow split into `fast` and `slow` jobs.** The ~75 real-BSR2-KDF
+  derivations (`test_sealed_vault`, `test_file_records`, `test_batch_upsert`,
+  `KeyringUnlockTests`, `FactorHashKdfRoundTripTests`) previously ran on **every**
+  matrix Python (3.10–3.13) via `run_tests.py`, at roughly a minute per
+  derivation — about 300 Actions-minutes per push. Now the `fast` job runs the
+  full non-KDF suite across 3.10–3.13, and a separate `slow` job runs the
+  real-KDF tests **once** on 3.12. Every test still runs on every push; the
+  cost is just no longer paid four times over.
+- **`pyproject.toml` trimmed to a ruff-only config.** This project is cloned
+  and run in place (`python cli.py`, `python run_tests.py`) and is never built
+  as a wheel or published, so the `[project]` metadata table was dead config
+  and — worse — carried a hardcoded version that had drifted from `version.py`.
+  The `[project]` table (and its duplicate version) was removed; `version.py`
+  (`__version__`) is now the single source of truth, consistent with how
+  `vault/` and `biometrics/` settings already import it. The `[tool.ruff]`
+  configuration is unchanged except for one added `per-file-ignores` glob
+  (`test_*.py`) so the two root-level test modules are covered like the ones
+  under `tests/`.
+
+### Notes
+
+- No stored format changed and no shipped module's behavior changed; 1.0.1 data
+  loads unchanged and there is nothing to migrate.
+- The version bump exists to record the CI/tooling fixes; the application code,
+  stored formats, and BSR2 construction are identical to 1.0.1.
+- The 1.0.1 security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package custody chain is tamper-evident rather than a
+  digital signature, and losing both a vault's passphrase and recovery code is
+  unrecoverable by design.
+
+---
+
 ## [1.0.1] - 2026-08-24
 
 A test-coverage and integrity pass on top of 1.0.0. No shipped module's

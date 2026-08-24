@@ -7,9 +7,10 @@ on:
 permissions:
   contents: read
 jobs:
-  test:
-    name: unittest (py${{ matrix.python-version }})
+  fast:
+    name: unittest --fast (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -19,8 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Run all test suites
-        run: python run_tests.py
+      - name: Run the fast suite (everything except the real-KDF tests)
+        run: python run_tests.py --fast
       - name: Verify the tests left no artifacts behind
         run: |
           if [ -n "$(git status --porcelain)" ]; then
@@ -28,6 +29,30 @@ jobs:
             git status --porcelain
             exit 1
           fi
+
+  slow:
+    name: unittest --slow (real BSR2 KDF)
+    runs-on: ubuntu-latest
+    # The vault/keyring/factor tests each run BSR2's deliberately slow
+    # passphrase derivation (~1 minute per derivation on CI hardware). They
+    # run on ONE Python version so the cost is paid once, not once per matrix
+    # entry. This job is slow by design and should not be mistaken for a hang.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run only the slow real-KDF tests
+        run: python run_tests.py --slow
+      - name: Verify the tests left no artifacts behind
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Tests modified the working tree:"
+            git status --porcelain
+            exit 1
+          fi
+
   lint:
     name: ruff
     runs-on: ubuntu-latest
@@ -40,32 +65,40 @@ jobs:
         run: pip install ruff==0.6.9
       - name: Lint
         run: ruff check .
+
   smoke:
     name: CLI smoke test
     runs-on: ubuntu-latest
-    # The vault and package CLIs each run BSR2's deliberately slow passphrase
-    # derivation (~1 minute per derivation on CI-class hardware). The default
-    # 360-minute limit is far more than needed, but the job is slow by design
-    # and should not be mistaken for a hang.
+    # The vault, biometrics, and package CLIs each run BSR2's deliberately slow
+    # passphrase derivation (~1 minute per derivation on CI hardware). The job
+    # is slow by design and should not be mistaken for a hang.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      # --- biometrics ---------------------------------------------------
+      # --- biometrics -----------------------------------------------------
+      # BUG FIX: biometrics enroll/verify unlock a local keyring via getpass,
+      # which falls back to a plain stdin read when stdin is not a TTY (as in
+      # CI). The previous workflow ran these with no passphrase piped in, so
+      # the very first enroll failed trying to create a keyring with an empty
+      # passphrase. Every keyring-touching command now has its passphrase
+      # piped in. make-samples/list/inspect/delete do not touch the keyring,
+      # so they need no passphrase.
       - name: Biometrics sample generation and multi-modal enroll/verify round trip
         working-directory: biometrics
         run: |
           set -euo pipefail
           python app.py make-samples ci-enroll
           python app.py make-samples ci-other
-          python app.py enroll ci-person --label "CI Person" \
+          # First enroll creates the keyring: passphrase + confirmation.
+          printf 'ci-bio-pass\nci-bio-pass\n' | python app.py enroll ci-person --label "CI Person" \
             --voice data/samples/ci-enroll_voice.wav \
             --fingerprint data/samples/ci-enroll_fingerprint.pgm \
             --video data/samples/ci-enroll_video.brvid
-          python app.py verify ci-person \
+          # Keyring now exists; later commands unlock it with a single line.
+          printf 'ci-bio-pass\n' | python app.py verify ci-person \
             --voice data/samples/ci-enroll_voice.wav \
             --fingerprint data/samples/ci-enroll_fingerprint.pgm \
             --video data/samples/ci-enroll_video.brvid
@@ -74,7 +107,7 @@ jobs:
       - name: Biometrics verification rejects a different identity's samples
         working-directory: biometrics
         run: |
-          if python app.py verify ci-person \
+          if printf 'ci-bio-pass\n' | python app.py verify ci-person \
               --voice data/samples/ci-other_voice.wav \
               --fingerprint data/samples/ci-other_fingerprint.pgm \
               --video data/samples/ci-other_video.brvid; then
@@ -85,7 +118,7 @@ jobs:
       - name: Re-enrolling an existing identity is refused
         working-directory: biometrics
         run: |
-          if python app.py enroll ci-person --label "Someone Else" \
+          if printf 'ci-bio-pass\n' | python app.py enroll ci-person --label "Someone Else" \
               --voice data/samples/ci-other_voice.wav; then
             echo "Expected re-enrollment to fail for an existing identity"
             exit 1
@@ -96,43 +129,18 @@ jobs:
         run: |
           set -euo pipefail
           python app.py delete ci-person
-          python app.py enroll ci-person --label "CI Person Renewed" \
+          printf 'ci-bio-pass\n' | python app.py enroll ci-person --label "CI Person Renewed" \
             --voice data/samples/ci-other_voice.wav
       - name: Invalid identity ids are rejected
         working-directory: biometrics
         run: |
-          # BUG FIX (2026-08-24): the previous invocation
-          #   python app.py enroll "ci/user" "Bad Id" --voice ...
-          # passed "Bad Id" as a second, unrecognized positional argument.
-          # biometrics/app.py's enroll subcommand takes exactly ONE positional
-          # (identity_id) plus a REQUIRED --label flag, so argparse itself
-          # rejected the command with exit code 2 before ever reaching
-          # identity_store._validate_identity_id -- the path-traversal /
-          # invalid-character validation this step is named for was never
-          # actually exercised. The step still reported success because it
-          # only checked "did the command fail", regardless of *why*.
-          # This corrected invocation uses the real CLI signature so the
-          # command reaches enroll's identity_id validation and is rejected
-          # for the right reason.
-          #
-          # NOTE: this fix previously landed in a stray tests.yml at the
-          # repository root instead of here, in .github/workflows/tests.yml
-          # -- GitHub Actions only reads workflows from .github/workflows/,
-          # so the earlier fix never actually took effect in CI. The stray
-          # root-level tests.yml should be deleted once this file is
-          # committed, so there is only one copy of this workflow.
-          if python app.py enroll "ci/user" --label "Bad Id" \
+          if printf 'ci-bio-pass\n' | python app.py enroll "ci/user" --label "Bad Id" \
               --voice data/samples/ci-enroll_voice.wav; then
             echo "Expected an invalid identity id to be rejected"
             exit 1
           fi
           echo "Invalid identity id correctly rejected."
-
       # --- vault ----------------------------------------------------------
-      # vault/app.py always prompts via getpass. getpass falls back to a plain
-      # stdin read (with a warning) when stdin isn't a TTY, which is the case
-      # here, so piping the passphrase in works without needing an env-var
-      # bypass in the CLI itself.
       - name: Vault round trip
         run: |
           set -euo pipefail
@@ -159,8 +167,7 @@ jobs:
             exit 1
           fi
           echo "Record correctly updated in place instead of duplicated."
-
-      # --- packages ---------------------------------------------------------
+      # --- packages -------------------------------------------------------
       - name: Package demo
         working-directory: packages
         run: python main.py demo

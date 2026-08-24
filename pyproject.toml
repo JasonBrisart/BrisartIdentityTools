@@ -1,27 +1,9 @@
-[project]
-name = "brisart-identity-tools"
-version = "1.0.0"
-description = "Dependency-free local identity tooling: a BSR2-encrypted record vault, local biometric verification with sealed templates, and identity-bound packages -- with a Tkinter desktop GUI."
-readme = "README.md"
-requires-python = ">=3.10"
-license = { file = "LICENSE" }
-authors = [{ name = "Jason Brisart" }]
-keywords = ["identity", "biometrics", "custody", "research", "gui"]
-classifiers = [
-  "Development Status :: 5 - Production/Stable",
-  "Intended Audience :: Science/Research",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Topic :: Security",
-]
-dependencies = []
-
-[project.urls]
-Homepage = "https://github.com/JasonBrisart/BrisartIdentityTools"
-Issues = "https://github.com/JasonBrisart/BrisartIdentityTools/issues"
+# BrisartIdentityTools is cloned and run in place (python cli.py ...,
+# python run_tests.py); it is never built as a wheel or published to PyPI, so
+# it intentionally declares no [project] metadata and no [build-system]. The
+# single source of truth for the version is version.py (__version__), imported
+# by vault/ and biometrics/ settings. This file exists only to configure ruff,
+# which the CI lint job runs as `ruff check .`.
 
 [tool.ruff]
 line-length = 100
@@ -52,5 +34,6 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"test_*.py" = ["S101", "PLR2004"]
 "**/tests/*.py" = ["S101", "PLR2004"]
 "biometrics/tests/test_sealed_biometrics_flow.py" = ["S101", "PLR2004", "E402"]
