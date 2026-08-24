@@ -16,8 +16,9 @@ import hashlib
 import unittest
 from pathlib import Path
 
-# Repo root is two levels up from this file: <root>/tests/test_...py
-_VENDOR_DIR = Path(__file__).resolve().parent.parent / "vendor"
+# This file lives at the repository root, next to vendor/, so vendor/ is ONE
+# level up from it -- Path(__file__).parent is the repo root itself.
+_VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
 # Pinned SHA-256 of each vendored file, byte-for-byte, as shipped in 1.0.0.
 PINNED_DIGESTS = {

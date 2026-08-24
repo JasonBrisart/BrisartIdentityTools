@@ -4,6 +4,44 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.0.3] - 2026-08-24
+
+A one-line path fix to the vendored-BSR2 digest-pin test. No shipped module
+changed and no stored format changed; this release only makes
+`test_bsr2_vendor_integrity.py` actually find the `vendor/` directory it is
+supposed to hash, so the integrity pin restored in 1.0.1 genuinely runs
+instead of erroring on a wrong path.
+
+### Fixed
+
+- **`test_bsr2_vendor_integrity.py` looked for `vendor/` one directory too
+  high.** The test computed `_VENDOR_DIR = Path(__file__).resolve().parent.parent
+  / "vendor"`, but the file ships at the **repository root** (next to `vendor/`),
+  not under a `tests/` subdirectory, so `.parent.parent` walked up to the
+  repository's *parent* folder and looked for `<parent>/vendor` — which does not
+  exist. Every subtest failed with a `FileNotFoundError` / "vendored BSR2
+  directory is missing" against a path like `.../GitHub/vendor` instead of
+  `.../GitHub/BrisartIdentityTools/vendor`. Changed to
+  `Path(__file__).resolve().parent / "vendor"` (one level up, since the file is
+  already at the root) and corrected the stale `<root>/tests/test_...py` comment.
+  The four pinned SHA-256 values were already correct and are unchanged; with
+  the path fixed, all four subtests pass and the vendor pin is genuinely
+  enforced.
+
+### Notes
+
+- No stored format changed and no shipped module's behavior changed; 1.0.2 data
+  loads unchanged and there is nothing to migrate.
+- This was purely a test-path arithmetic bug: the vendored files, their pinned
+  digests, and the test's comparison logic were all correct. Only the directory
+  the test looked in was wrong.
+- The 1.0.1 security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package custody chain is tamper-evident rather than a
+  digital signature, and losing both a vault's passphrase and recovery code is
+  unrecoverable by design.
+
+---
+
 ## [1.0.2] - 2026-08-24
 
 A CI, test-runner, and tooling pass on top of 1.0.1. No shipped module's

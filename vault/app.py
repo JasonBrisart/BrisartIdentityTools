@@ -172,7 +172,7 @@ def command_list(args) -> int:
     for summary in summaries:
         extra = ""
         if summary["kind"] == "file":
-            extra = f" (encrypted file record)"
+            extra = " (encrypted file record)"
         print(f"{summary['record_id']}: {summary['label']} [{summary['kind']}]{extra} "
               f"(updated {summary['updated_at']})")
     return 0

@@ -8,7 +8,6 @@ import secrets
 import unittest
 
 from biometrics.identity import device_key
-from biometrics.identity.device_key import DeviceKeyError
 
 
 class DeviceFingerprintTests(unittest.TestCase):

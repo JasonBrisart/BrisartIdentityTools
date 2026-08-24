@@ -2,22 +2,20 @@
 """Run the BrisartIdentityTools test suite.
 
 The repository is one flat PEP 420 namespace-package tree with no __init__.py
-files, and conftest.py is a pytest-only hook that `unittest` never loads. A
-blanket `unittest discover -s . -t .` is therefore fragile: it can silently
-collect nothing or error on import. This runner instead discovers each tests/
-directory explicitly (with the repository root as top_level_dir, so imports
-like `crypto.tests.test_envelope` resolve as namespace packages on every
-supported Python), adds the two root-level test modules by name, and fails
-loudly if collection hits an import error rather than passing with zero tests.
+files. unittest's discover(start_dir=...) cannot import a namespace sub-package
+as a start directory (it raises "Start directory is not importable"), so this
+runner instead finds every test_*.py file on disk, converts each path to its
+dotted module name, and loads it by name. Loading by dotted name works for
+namespace packages as long as the repository root is on sys.path (added below).
 
 A handful of tests exercise BSR2's real, deliberately-slow password KDF
-(~1 minute per derivation on CI hardware). They are grouped by class in
-SLOW_TEST_CLASSES so they can be run separately from everything else:
+(~1 minute per derivation on CI hardware), grouped by class in
+SLOW_TEST_CLASSES so they can be run separately:
 
     python run_tests.py            run every test
     python run_tests.py --fast     everything EXCEPT the slow real-KDF tests
     python run_tests.py --slow     ONLY the slow real-KDF tests
-    python run_tests.py --fast -v  verbose (combine with --fast/--slow)
+    python run_tests.py --fast -v  verbose
 """
 import argparse
 import sys
@@ -27,21 +25,6 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parent
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
-
-# Every directory that holds tests, discovered as a namespace subpackage.
-TEST_DIRECTORIES = [
-    "crypto/tests",
-    "common/tests",
-    "vault/tests",
-    "biometrics/tests",
-    "packages/tests",
-]
-
-# Test modules that live at the repository root (top-level modules).
-ROOT_TEST_MODULES = [
-    "test_bsr2_vendor_integrity",
-    "test_cli_dispatcher",
-]
 
 # TestCase classes that run BSR2's real password KDF and are slow by design.
 # Filtered at the class level so a module holding BOTH fast and slow classes
@@ -55,6 +38,22 @@ SLOW_TEST_CLASSES = {
     "crypto.tests.test_keyring.KeyringUnlockTests",
     "crypto.tests.test_factors.FactorHashKdfRoundTripTests",
 }
+
+_EXCLUDED_PARTS = {
+    "__pycache__", "vendor", ".git", "build", "dist",
+    ".venv", "venv", "node_modules", ".idea", ".vscode",
+    "PROJECT_CONTEXT_EXPORTS", "data",
+}
+
+
+def _discover_module_names():
+    names = []
+    for path in sorted(REPOSITORY_ROOT.rglob("test_*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT)
+        if any(part in _EXCLUDED_PARTS for part in relative.parts):
+            continue
+        names.append(".".join(relative.with_suffix("").parts))
+    return names
 
 
 def _iter_tests(suite):
@@ -73,18 +72,7 @@ def _class_id(test):
 def build_suite(mode):
     loader = unittest.TestLoader()
     collected = unittest.TestSuite()
-    for directory in TEST_DIRECTORIES:
-        start = REPOSITORY_ROOT / directory
-        if not start.is_dir():
-            continue
-        collected.addTests(
-            loader.discover(
-                start_dir=str(start),
-                pattern="test_*.py",
-                top_level_dir=str(REPOSITORY_ROOT),
-            )
-        )
-    for module_name in ROOT_TEST_MODULES:
+    for module_name in _discover_module_names():
         collected.addTests(loader.loadTestsFromName(module_name))
 
     if loader.errors:
@@ -104,14 +92,10 @@ def build_suite(mode):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run the BrisartIdentityTools test suite."
-    )
+    parser = argparse.ArgumentParser(description="Run the BrisartIdentityTools test suite.")
     selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--fast", action="store_true",
-                           help="skip the slow real-KDF tests.")
-    selection.add_argument("--slow", action="store_true",
-                           help="run ONLY the slow real-KDF tests.")
+    selection.add_argument("--fast", action="store_true", help="skip the slow real-KDF tests.")
+    selection.add_argument("--slow", action="store_true", help="run ONLY the slow real-KDF tests.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -120,8 +104,7 @@ def main():
     result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
 
     print(f"\n=== summary ({mode}) ===")
-    print(f"{'PASS' if result.wasSuccessful() else 'FAIL'}  "
-          f"ran {result.testsRun} test(s)")
+    print(f"{'PASS' if result.wasSuccessful() else 'FAIL'}  ran {result.testsRun} test(s)")
     return 0 if result.wasSuccessful() else 1
 
 

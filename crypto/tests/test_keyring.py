@@ -12,7 +12,6 @@ Split into two classes by cost:
   the same real-KDF cost the existing vault/package suites already pay.
 """
 import copy
-import secrets
 import unittest
 
 from crypto.errors import (

@@ -14,7 +14,6 @@ patterned synthetic data sized and shaped like the real thing, sufficient to
 drive the feature extractors end-to-end.
 """
 import math
-import struct
 
 from biometrics.codecs import pgm, video, wave_tools
 

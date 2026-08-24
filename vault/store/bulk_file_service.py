@@ -45,7 +45,6 @@ import zipfile
 from pathlib import Path
 
 from common.hashing import sha256_bytes
-from vault.store.vault_service import FILE_RECORD_KIND, VaultServiceError
 
 BUNDLE_MANIFEST_KIND = "bundle-manifest"
 BUNDLE_CHUNK_KIND = "bundle-chunk"

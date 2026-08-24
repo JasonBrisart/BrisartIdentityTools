@@ -22,7 +22,6 @@ import secrets
 
 from crypto.context import key_slot_context, package_context
 from crypto.envelope import open_bytes, open_json, seal_bytes, seal_json
-from crypto.errors import Bsr2IntegrationError
 from crypto.rng import new_generator
 
 CONTENT_KEY_BYTES = 32

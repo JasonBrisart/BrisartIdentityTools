@@ -69,7 +69,7 @@ from packages.package import PackageError
 from vault.config import settings as vault_settings
 from vault.store.vault_file import VaultFileError, vault_exists
 from vault.store.vault_service import VaultService, VaultServiceError
-from vault.store.bulk_file_service import BulkFileService, BulkFileServiceError
+from vault.store.bulk_file_service import BulkFileService
 
 APP_TITLE = "BrisartIdentityTools"
 _MODALITY_FILETYPES = {

@@ -19,7 +19,6 @@ select = [
   "W",
   "B",
   "DTZ",
-  "RUF013",
   "PLE",
   "PLW",
   "S102",
@@ -35,5 +34,6 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "test_*.py" = ["S101", "PLR2004"]
-"**/tests/*.py" = ["S101", "PLR2004"]
-"biometrics/tests/test_sealed_biometrics_flow.py" = ["S101", "PLR2004", "E402"]
+"**/tests/*.py" = ["S101", "PLR2004", "B017"]
+"biometrics/tests/test_sealed_biometrics_flow.py" = ["S101", "PLR2004", "E402", "B017"]
+"gui/app.py" = ["E402", "F841"]

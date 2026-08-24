@@ -1,7 +1,6 @@
 """Tests for identity id validation across identity_record and identity_store."""
 import tempfile
 import unittest
-from pathlib import Path
 
 from biometrics.identity.identity_record import (
     IdentityRecordError,

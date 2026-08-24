@@ -11,7 +11,7 @@ from vault.records.record_model import (
 )
 from vault.reports import audit_log
 from vault.store.vault_file import (
-    VaultFileError, create_vault_file, load_records, load_state, save_keyring, save_records,
+create_vault_file, load_records, load_state, save_keyring, save_records,
 )
 
 # The vault record "kind" reserved for arbitrary raw-file payloads created by

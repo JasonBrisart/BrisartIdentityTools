@@ -33,10 +33,6 @@ jobs:
   slow:
     name: unittest --slow (real BSR2 KDF)
     runs-on: ubuntu-latest
-    # The vault/keyring/factor tests each run BSR2's deliberately slow
-    # passphrase derivation (~1 minute per derivation on CI hardware). They
-    # run on ONE Python version so the cost is paid once, not once per matrix
-    # entry. This job is slow by design and should not be mistaken for a hang.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -69,35 +65,31 @@ jobs:
   smoke:
     name: CLI smoke test
     runs-on: ubuntu-latest
-    # The vault, biometrics, and package CLIs each run BSR2's deliberately slow
-    # passphrase derivation (~1 minute per derivation on CI hardware). The job
-    # is slow by design and should not be mistaken for a hang.
     timeout-minutes: 60
+    # The three CLIs import top-level packages (biometrics.*, packages.*), but
+    # some steps run from inside a tool subdirectory, so the repo root must be
+    # importable regardless of CWD.
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       # --- biometrics -----------------------------------------------------
-      # BUG FIX: biometrics enroll/verify unlock a local keyring via getpass,
-      # which falls back to a plain stdin read when stdin is not a TTY (as in
-      # CI). The previous workflow ran these with no passphrase piped in, so
-      # the very first enroll failed trying to create a keyring with an empty
-      # passphrase. Every keyring-touching command now has its passphrase
-      # piped in. make-samples/list/inspect/delete do not touch the keyring,
-      # so they need no passphrase.
+      # enroll/verify unlock a local keyring via getpass, which falls back to a
+      # plain stdin read when stdin is not a TTY (as in CI), so every
+      # keyring-touching command has its passphrase piped in.
       - name: Biometrics sample generation and multi-modal enroll/verify round trip
         working-directory: biometrics
         run: |
           set -euo pipefail
           python app.py make-samples ci-enroll
           python app.py make-samples ci-other
-          # First enroll creates the keyring: passphrase + confirmation.
           printf 'ci-bio-pass\nci-bio-pass\n' | python app.py enroll ci-person --label "CI Person" \
             --voice data/samples/ci-enroll_voice.wav \
             --fingerprint data/samples/ci-enroll_fingerprint.pgm \
             --video data/samples/ci-enroll_video.brvid
-          # Keyring now exists; later commands unlock it with a single line.
           printf 'ci-bio-pass\n' | python app.py verify ci-person \
             --voice data/samples/ci-enroll_voice.wav \
             --fingerprint data/samples/ci-enroll_fingerprint.pgm \
