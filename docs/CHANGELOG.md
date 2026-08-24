@@ -4,6 +4,75 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.0.1] - 2026-08-24
+
+A test-coverage and integrity pass on top of 1.0.0. No shipped module's
+behavior changes — this release adds 204 new tests across 19 files, fills the
+biggest coverage gaps left after the 1.0.0 restructure (the entire `crypto/`
+layer previously had no direct tests), and **restores the vendored-BSR2 digest
+pin that was dropped in 1.0.0**. No stored format changed and no data migration
+is required.
+
+### Added
+
+**Direct tests for the `crypto/` layer (previously untested)**
+- `crypto/tests/test_envelope.py` — seal/open round trips, length-hiding
+  padding buckets, context binding (a ciphertext cannot be moved between
+  contexts), uniform authentication failure on modified ciphertext / wrong key
+  / wrong context, and the `MAX_PAYLOAD_BYTES` refusal. Uses a random 32-byte
+  master key, so it exercises real BSR2 sealing without paying the KDF cost.
+- `crypto/tests/test_keyring.py` — malformed-state rejection, the iteration
+  floor **and** ceiling (0.8.0-beta), recovery-code formatting, and a small
+  real-KDF unlock round trip (passphrase and recovery code).
+- `crypto/tests/test_factors.py` — keyed-MAC bind/verify (fast), parse-time
+  rejection of out-of-range iteration counts without running the KDF, plus one
+  real-KDF hash/verify round trip.
+- `crypto/tests/test_throttle.py` — regression coverage for the 0.8.0-beta
+  corrupt-state hardening: `NaN`/`Infinity`/negative fields are discarded, a
+  `NaN` `locked_until` no longer silently unlocks, and an astronomical
+  `failed_attempts` no longer builds a giant integer.
+- `crypto/tests/test_context.py` and `crypto/tests/test_rng.py` — context-string
+  construction/rejection and DRBG output-length/independence checks.
+
+**Coverage for the rest of the tree**
+- `common/tests/test_common_utils.py` — atomic writes, hashing, and the
+  timestamp helpers, including an explicit check that the `utc_now_iso` alias
+  exists (its absence was the 1.0.0 import crash).
+- `vault/tests/` — `test_record_model.py`, `test_record_ids_and_time.py` (the
+  0.4.0 shared-timestamp rule), and `test_audit_log.py`.
+- `biometrics/tests/` — `test_bulk_attachments.py` (multi-chunk + mixed
+  file/folder bundling, missing-chunk detection), `test_device_key.py`, and
+  `test_report_writer.py`.
+- `packages/tests/` — `test_custody_chain.py` (including the 0.8.2-beta
+  non-list `CustodyError`), `test_identity.py`, `test_package_audit.py`, and
+  `test_verification.py`.
+- `tests/test_cli_dispatcher.py` — the `cli.py` dispatch table, including that
+  every documented tool (`biometrics`, `vault`, `package`, `gui`, `version`,
+  `help`) is reachable.
+
+### Fixed
+
+- **Restored the vendored-BSR2 digest pin.** `tests/test_bsr2_vendor_integrity.py`
+  is recreated: it SHA-256s every file in `vendor/` against pinned values and
+  fails if any drifts, is edited, or an unpinned `.py` file appears. This closes
+  the open item flagged in `README.md`, `docs/BSR2_INTEGRATION.md`, and
+  `vendor/README.md` after 1.0.0 dropped the original test.
+
+### Notes
+
+- No stored format changed and no shipped module's behavior changed; 1.0.0 data
+  loads unchanged and there is nothing to migrate.
+- Most new tests use injected 32-byte keys or envelope-shaped fixtures so they
+  run fast; the real-KDF round trips are isolated into their own test classes
+  and are slow by design (~85 s per derivation), consistent with the existing
+  sealed-vault and package suites.
+- The 1.0.0 security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package custody chain is tamper-evident rather than a
+  digital signature, and losing both a vault's passphrase and recovery code is
+  unrecoverable by design.
+
+---
+
 ## [1.0.0] - 2026-08-24
 
 The first non-beta, production/stable release of **BrisartIdentityTools**.
