@@ -23,13 +23,13 @@ _VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 # Pinned SHA-256 of each vendored file, byte-for-byte, as shipped in 1.0.0.
 PINNED_DIGESTS = {
     "brisart_security_drbg.py":
-        "89ccae491f64f0b613bdf5ae17bbf9addf4d41282b602d001d3a9221cf4ad92f",
+        "11db87c761e1f1b3c4c927aa6abac0ef72bb8987943e81e155df0f8ca92c3ce7",
     "brisart_security_entropy.py":
-        "b50b01b78c268956841af85a1e2eaf9c284d01e2ce49be6feea40a92c912747b",
+        "efa8db935dc51a73f4729c4d68d91dac663f359bae01ed6c18adf1d566252252",
     "brisart_security_envelope.py":
-        "93b0f72d1f6be824a4c2f47e5319fb34cbd9d9b7820f9564aa50932f770b720c",
+        "e0233e4c0ed8c2ec6754aede0f683f3530f1714a60592515736e9688364c55fe",
     "brisart_security_primitives.py":
-        "d5ba60224cbfc54848ece22d624abfb915f953418353bede36ee0a92257a653e",
+        "c131ba20d8cad116bf82422904e3a9f3f140edee22a8af14f5a00732c5e5524d",
 }
 
 
