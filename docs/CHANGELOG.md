@@ -4,6 +4,182 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.0.0] - 2026-08-24
+
+The first non-beta, production/stable release of **BrisartIdentityTools**.
+
+This release is far more than a version bump over `0.8.2-beta`. Between the two
+builds the entire repository was **restructured into a single flat tree**, three
+brand-new subsystems were added (a desktop GUI, a full file/folder/drive
+encryption layer, and a unified CLI dispatcher), a shared `common/` utility
+layer was extracted, and a batch of defensive bug fixes landed. Every tool
+directory was renamed and reorganized.
+
+No stored format changed: vaults, identities, keyrings, templates, and packages
+written by `0.8.2-beta` load unchanged. There is nothing to migrate.
+
+---
+
+### Added
+
+**Desktop GUI (`gui/`)**
+- **`gui/app.py`** — a single-window Tkinter desktop front-end covering all
+  three tools (Vault, Biometrics, Packages) in one process. Standard library
+  only (`tkinter` ships with Python), so it adds no new dependency. Every
+  button calls directly into the existing service layer
+  (`vault.store.vault_service.VaultService`,
+  `biometrics.engine.enrollment`/`verification`, `packages.package`); no crypto,
+  validation, or persistence logic is duplicated in the GUI.
+  - **Vault tab**: choose/init/unlock/lock a vault, list records (works while
+    locked), create records via a JSON payload editor, view/decrypt or delete a
+    record, **plus** a new "Files / Folders / Drives" sub-tab for bulk
+    encryption of any size.
+  - **Biometrics tab**: create/unlock the keyring, enroll against
+    voice/fingerprint/video files, verify a probe with an "any modality matches"
+    option, inspect, delete, generate synthetic samples, **plus** a new "File
+    Attachments" sub-tab.
+  - **Packages tab**: create a package, add/remove recipients, open as a
+    recipient, verify and display the custody chain, and run the same demo cycle
+    as `packages/main.py demo`.
+  - Every KDF-touching operation runs on a background thread behind a modal
+    "Working..." progress dialog, so the window never appears frozen during a
+    derivation that can take tens of seconds to minutes.
+
+**Full file / folder / drive encryption**
+- **`vault/store/bulk_file_service.py`** — `BulkFileService`: chunked
+  encrypt/decrypt of content of any size, plus `upsert_paths()` /
+  `restore_paths()` to zip any mix of files, folders, and drive roots into one
+  bundle (preserving relative structure) before chunking past BSR2's ~16 MiB
+  single-envelope limit. Reassembly verifies a whole-content SHA-256.
+- **`biometrics/engine/bulk_attachments.py`** — the same chunking/bundling
+  logic, biometrics-side, storing chunks as ordinary attachments plus a manifest.
+- **`biometrics/engine/attachments.py`** — attach an arbitrary raw file (any
+  extension, or none) to an identity, sealed under the same master key,
+  byte-for-byte recoverable.
+- **`vault/store/vault_service.py`** — new `upsert_file` / `upsert_file_bytes` /
+  `get_file` / `get_file_bytes` methods to seal arbitrary raw bytes as a vault
+  record (never parsed as JSON), with plaintext filename/size/SHA-256 metadata.
+- **`docs/README_FULL_FILE_ENCRYPTION.md`** — documents the feature and its
+  honest real-world throughput ceiling (BSR2 is ~1.4 KB/s in pure Python).
+
+**Unified CLI dispatcher**
+- **`cli.py`** — `python cli.py <tool> ...` launches `biometrics`, `vault`,
+  `package`, or `gui` in-process, plus `version` and `help`.
+
+**Shared utility layer (`common/`)**
+- **`common/atomic_io.py`** — the single canonical `atomic_write_text` /
+  `atomic_write_json`, replacing three near-identical write-then-rename copies.
+- **`common/hashing.py`** — canonical `sha256_bytes` / `sha256_file`, replacing
+  five pasted copies.
+- **`common/timestamps.py`** — canonical UTC timestamp helpers.
+- **`common/README.md`**.
+
+**Other new files**
+- **`version.py`** — single source of truth for the ecosystem version
+  (`__version__ = "1.0.0"`), imported by both `vault` and `biometrics` settings
+  so the two tools can never report different versions.
+- New tests: `vault/tests/test_bulk_file_service.py`,
+  `vault/tests/test_file_records.py`, `biometrics/tests/test_attachments.py`.
+- New docs/READMEs across every subsystem (`crypto/README.md`,
+  `packages/README.md`, `vault/README.md`, `biometrics/README.md`,
+  `vendor/README.md`).
+
+---
+
+### Changed
+
+**Repository restructure — every tool directory renamed and reorganized**
+- `LabID_Beta/`            → **`biometrics/`** (reorganized into
+  `codecs/`, `engine/`, `features/`, `identity/`, `reports/`, `samples/`,
+  `config/`, `tests/`).
+- `IdentityVault_beta/`    → **`vault/`** (persistence moved under
+  `vault/store/`).
+- `identity_bound_packages/` → **`packages/`**.
+- `brisart_bsr2/`          → **`crypto/`** (BSR2 integration layer).
+- `bsr2_vendor/`           → **`vendor/`** (vendored BSR2, byte-identical).
+- The repository is now **one flat namespace-package tree (PEP 420)** with
+  fully-qualified imports throughout; `brisart_bsr2/__init__.py` and other
+  `__init__.py` markers were dropped. A single `conftest.py` /
+  `run_tests.py` now drives every suite in one pass.
+- `packages/crypto.py` → **`packages/ciphers.py`** (renamed to avoid colliding
+  with the new top-level `crypto/` package).
+
+**Versioning & packaging**
+- Version bumped `0.8.2-beta` → **`1.0.0`**.
+- `pyproject.toml` development-status classifier moved from
+  `4 - Beta` → **`5 - Production/Stable`**; description and keywords updated to
+  mention the GUI.
+- `README.md` quick-start now documents `python cli.py gui` and the new
+  restructured layout / commands.
+
+**CLI surface**
+- `vault/app.py` gained `encrypt-file`, `decrypt-file`, `encrypt-paths`, and
+  `restore-paths` subcommands.
+- `biometrics/app.py` gained `attach`, `attach-paths`, `extract-attachment`,
+  `restore-paths`, and `remove-attachment` subcommands.
+
+---
+
+### Removed
+
+- **`tests/test_bsr2_vendor_integrity.py`** — the digest pin that verified the
+  vendored BSR2 files were byte-identical to upstream was **dropped during the
+  restructure and not recreated**. Until it (or an equivalent digest check) is
+  re-added, an accidental edit to `vendor/` will not be caught by CI. Flagged as
+  an open item in `vendor/README.md` and `docs/BSR2_INTEGRATION.md`.
+- **`LabID_Beta/core/scoring.py`** and **`LabID_Beta/core/template_engine.py`** —
+  no longer present in the reorganized `biometrics/` tree.
+- All `_beta` / `LabID` / `IdentityVault` / `brisart_bsr2` / `bsr2_vendor`
+  directory names and their contents (superseded by the renamed trees above).
+
+---
+
+### Fixed
+
+- **Timestamp import crash (`common/timestamps.py`)** — every consumer imports
+  `utc_now_iso`, but the canonical module only defined `utc_now`. An
+  `utc_now_iso = utc_now` alias was added; without it, importing any vault,
+  biometrics, or packages module raised
+  `ImportError: cannot import name 'utc_now_iso'` and broke all three tools.
+- **Wrong sealed-envelope algorithm assertion in tests** — `test_sealed_vault.py`
+  and `test_sealed_biometrics_flow.py` asserted the envelope `algorithm` was
+  `"BSR2"`, but the real constant is `"BSR2-ARX-SPONGE-ETM"`. The old assertion
+  always failed even though sealing was correct; both tests now assert the
+  correct value.
+- **CI invalid-identity-id smoke step (`.github/workflows/tests.yml`)** — the
+  step meant to exercise path-traversal/invalid-char validation was passing a
+  bad second positional argument, so argparse rejected the command before
+  validation ran (the step passed for the wrong reason). It now uses the real
+  CLI signature so the identity-id validation is actually exercised. A stray
+  duplicate `tests.yml` at the repo root (which Actions never reads) was noted
+  for removal.
+- **Custody chain hardening (`packages/custody.py`)** — `verify_chain` now
+  rejects a non-list chain and non-dict entries with `CustodyError` before
+  iterating, instead of raising a raw `TypeError` on a hand-edited
+  `"custody_chain": 123`. New regression tests cover both cases.
+- **Unused imports (`packages/package.py`)** — removed `RecipientIdentityError`
+  and `validate_identity_id` imports (never referenced) that failed the ruff
+  `F401` lint job.
+
+---
+
+### Notes
+
+- **No data migration required.** Every stored format, encryption scheme, and
+  the underlying BSR2 construction are unchanged from `0.8.2-beta`; CLI and GUI
+  usage can be freely mixed against the same vault/keyring/package files.
+- The GUI is a **second way to drive the same application layer**, not a new
+  one. Every security caveat in `docs/BSR2_INTEGRATION.md` still applies: BSR2 is
+  unreviewed research cryptography, the package custody chain is tamper-evident
+  rather than a digital signature, and losing both a vault's passphrase and
+  recovery code is unrecoverable by design.
+- The full file/folder/drive encryption removes the *architectural* 16 MiB
+  ceiling via chunking, but the *practical* ceiling is now throughput
+  (~1.4 KB/s in pure Python) — realistic for individual files and folders up to
+  tens of MB, not for backing up a whole multi-hundred-GB drive.
+
+---
+
 ## [0.8.2-beta] - 2026-08-23
 
 One more defensive bug fix in the identity-bound package open path, in the same

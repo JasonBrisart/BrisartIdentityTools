@@ -59,9 +59,9 @@ desktop.ini
 .env.production
 .env.test
 
-# BSR2 key material. device_key.json decrypts every LabID biometric template
-# in its data directory, so it must never reach the repository. Listed by name
-# as well as by directory in case a data directory is ever relocated.
+# BSR2 key material. device_key.json decrypts every biometrics template in its
+# data directory, so it must never reach the repository. Listed by name as
+# well as by directory in case a data directory is ever relocated.
 device_key.json
 *.identity
 
@@ -72,10 +72,9 @@ device_key.json
 # reports, and sealed packages produced by local or CI runs. They are generated
 # artefacts containing personal and key material, never source.
 # ---------------------------------------------------------------------------
-LabID_Beta/data/
-identity_bound_packages/identities/
-identity_bound_packages/packages/
-IdentityVault_beta/vaults/
+biometrics/data/
+packages/data/
+vault/data/
 *.ibp
 
 # ---------------------------------------------------------------------------
@@ -110,50 +109,38 @@ PROJECT_MANIFEST.json
 PROJECT_SUMMARY.txt
 PROJECT_SNAPSHOT.zip
 
-
 # ==================================================
 # ArchiveSnapshot
 # ==================================================
-
 # Dated snapshot storage created inside archived source folders
 ARCHIVE_TIMELINE/
-
 # GUI application settings (per-machine, not part of source)
 ARCHIVE_SNAPSHOT_SETTINGS.json
-
 # Headless daily automation config/state/log (per-machine, not source)
 DAILY_SNAPSHOT_CONFIG.json
 DAILY_SNAPSHOT_STATE.json
 DAILY_SNAPSHOT_LOG.md
-
 # Project Context Helper inbox contents (staged files, not source)
 SNAPSHOT_ACTIVE/
-
 
 # ==================================================
 # BrisartAI
 # ==================================================
-
 # Runtime data
 conversation_memory.sqlite3
 session_memory.sqlite3
 brisart_ai_index.sqlite3
-
 # Exported knowledge archives
 exports/
 archive_exports/
 knowledge_exports/
-
 # Future AI models
 models/
 downloads/
-
 # Future plugin cache
 plugins/cache/
-
 # Future crawl cache
 crawl_cache/
 web_cache/
-
 # Future scan cache
 scan_cache/

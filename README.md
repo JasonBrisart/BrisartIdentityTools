@@ -3,11 +3,8 @@
 Local-first identity, authentication, and verification tools for offline and air-gapped environments.
 
 No cloud services.
-
 No hosted infrastructure.
-
 No vendor lock-in.
-
 Just Python.
 
 ---
@@ -35,27 +32,21 @@ This repository focuses on local-first, transparent, and auditable identity work
 ## Design Principles
 
 ### Local First
-
 Identity should function without requiring external services.
 
 ### Offline Capable
-
 Systems should remain usable in disconnected and air-gapped environments.
 
 ### Human Readable
-
 Identity records and configuration should be understandable by humans.
 
 ### Source Available
-
 Users should be able to inspect how verification occurs.
 
 ### Audit Friendly
-
 Verification logic should be transparent and reviewable.
 
 ### Long-Term Maintainability
-
 Identity systems should remain understandable years from now.
 
 ---
@@ -80,11 +71,9 @@ Identity is intentionally broader than just people.
 ## Current Research Areas
 
 ### Identity Records
-
 Create and manage local identity records.
 
 Examples:
-
 - User identities
 - Device identities
 - Research identities
@@ -93,11 +82,9 @@ Examples:
 ---
 
 ### Credential Verification
-
 Validate locally stored credentials.
 
 Examples:
-
 - Password verification
 - Passphrase verification
 - Credential comparison
@@ -106,11 +93,9 @@ Examples:
 ---
 
 ### Physical Identity Tokens
-
 Explore possession-based identity systems.
 
 Examples:
-
 - USB authentication tokens
 - Offline access tokens
 - Removable media credentials
@@ -119,9 +104,7 @@ Examples:
 ---
 
 ### Verification Reports
-
 Generate verification reports showing:
-
 - Verification status
 - Validation results
 - Timestamp information
@@ -130,11 +113,9 @@ Generate verification reports showing:
 ---
 
 ### Local Trust Models
-
 Research methods for establishing trust without relying on cloud infrastructure.
 
 Examples:
-
 - Local trust stores
 - Credential manifests
 - Verification chains
@@ -147,34 +128,27 @@ Examples:
 Potential future experiments include:
 
 ### Multi-Factor Authentication
-
 Combining multiple local authentication methods.
 
 Examples:
-
 - Password + token
 - Passphrase + removable media
 - Device + credential verification
 
 ### Smart Card Integration
-
 Exploration of offline credential devices.
 
 ### Certificate-Based Workflows
-
 Local certificate generation and validation.
 
 ### Air-Gapped Authentication
-
 Authentication methods designed for isolated environments.
 
 ### Biometric Research
-
 Identity experiments using local biometric methods.
 
 Potential examples:
-
-- Facial verification research
+- Voice and fingerprint verification research
 - Identity template comparison
 - Offline biometric experiments
 
@@ -191,7 +165,6 @@ BrisartIdentityTools follows a simple belief:
 If software, archives, and research can be controlled locally, identity should be capable of the same.
 
 The objective is not to replace enterprise authentication platforms.
-
 The objective is to explore transparent, understandable, and locally controlled identity systems.
 
 ---
@@ -223,61 +196,52 @@ cd BrisartIdentityTools
 
 ### Run the tests
 
-The three tools use different import roots, so one runner drives all of them:
+The repository is one flat tree with fully-qualified imports throughout, so one runner drives every suite:
 
 ```bash
-python run_tests.py          # 91 tests across the three suites
+python run_tests.py          # full suite across biometrics, vault, and packages
 python run_tests.py -v       # verbose
 ```
 
-### LabID: enroll and verify local face, voice, fingerprint, and video samples
+### Biometrics: enroll and verify local voice, fingerprint, and video samples
 
 ```bash
-cd LabID_Beta
-python app.py make-samples
+cd biometrics
+python app.py make-samples ci-enroll
+python app.py make-samples ci-other
 
-# Face (PNG or PGM)
-python app.py enroll jason-face "Jason Face" data/samples/sample_face_enroll.png --modality face
-python app.py verify jason-face data/samples/sample_face_verify_close.png --modality face   # MATCH
-python app.py verify jason-face data/samples/sample_face_verify_far.png --modality face     # NO_MATCH
+# Voice (WAV PCM), fingerprint (PGM), and video (BRVID) together
+python app.py enroll jason-1 --label "Jason" \
+  --voice data/samples/ci-enroll_voice.wav \
+  --fingerprint data/samples/ci-enroll_fingerprint.pgm \
+  --video data/samples/ci-enroll_video.brvid
 
-# Voice (WAV PCM)
-python app.py enroll jason-voice "Jason Voice" data/samples/sample_voice_enroll.wav --modality voice
-python app.py verify jason-voice data/samples/sample_voice_verify_close.wav --modality voice # MATCH
-python app.py verify jason-voice data/samples/sample_voice_verify_far.wav --modality voice   # NO_MATCH
+python app.py verify jason-1 \
+  --voice data/samples/ci-enroll_voice.wav \
+  --fingerprint data/samples/ci-enroll_fingerprint.pgm \
+  --video data/samples/ci-enroll_video.brvid           # MATCH
 
-# Fingerprint (PNG)
-python app.py enroll jason-finger "Jason Finger" data/samples/sample_fingerprint_enroll.png --modality fingerprint
-python app.py verify jason-finger data/samples/sample_fingerprint_verify_close.png --modality fingerprint # MATCH
-python app.py verify jason-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint   # NO_MATCH
-
-python app.py enroll jason-video "Jason Video" data/samples/sample_video_enroll.avi --modality video
-python app.py verify jason-video data/samples/sample_video_verify_close.avi --modality video # MATCH
-python app.py verify jason-video data/samples/sample_video_verify_far.avi --modality video   # NO_MATCH
-
-# A recording of a still photo scores a near-perfect face match, so liveness
-# is a gate, not a score term. This one is rejected as LIVENESS_FAILED.
-python app.py verify jason-video data/samples/sample_video_photo_replay.avi --modality video
-
-# Build a recording from frames already on disk, then use it for FaceID.
-# Camera capture needs a platform driver, which would mean a dependency.
-python app.py record-video my_clip.avi frame1.png frame2.png frame3.png
-python app.py probe-video my_clip.avi
+python app.py verify jason-1 \
+  --voice data/samples/ci-other_voice.wav \
+  --fingerprint data/samples/ci-other_fingerprint.pgm \
+  --video data/samples/ci-other_video.brvid             # NO MATCH
 
 python app.py list
+python app.py inspect jason-1
 ```
 
-Re-enrolling an existing identity is refused unless you pass `--overwrite`,
-because it replaces that identity's stored biometric template.
+Re-enrolling an existing identity is refused outright. There is no
+`--overwrite` flag; delete the identity first with `python app.py delete
+jason-1`, then enroll again, if you need to replace its stored template.
 
-### IdentityVault: store and read local records
+### Vault: store and read local records
 
 ```bash
-python -m IdentityVault_beta.app --vault vault.json init
-python -m IdentityVault_beta.app --vault vault.json add \
-    --kind identity --label "Researcher One" --value "record-value"
-python -m IdentityVault_beta.app --vault vault.json list
-python -m IdentityVault_beta.app --vault vault.json verify
+python -m vault.app --vault vault.json init
+python -m vault.app --vault vault.json upsert "Researcher One" \
+  --kind identity --payload '{"value": "record-value"}'
+python -m vault.app --vault vault.json list
+python -m vault.app --vault vault.json get RECORD_ID
 ```
 
 `--vault` is a global option, so it goes before the subcommand.
@@ -286,44 +250,44 @@ python -m IdentityVault_beta.app --vault vault.json verify
 passphrase, the vault cannot be opened by anyone, including you.
 
 Every command that touches record values unlocks the vault first, which runs
-BSR2's slow key derivation — expect roughly a minute per invocation, and about
-three for `init` (it derives both the passphrase and recovery wrappers). That is
-the KDF working as intended, not a hang. `list` and `verify` read record shells
-only, so they do not need the passphrase.
+BSR2's slow key derivation — expect roughly a minute per invocation. `list`
+reads record shells only, so it does not prompt for a passphrase.
 
-For scripting, `IDENTITY_VAULT_PASSPHRASE` is honoured instead of the prompt.
-Convenient and less secret: environment variables are visible to other processes
-of the same user and often land in shell history and CI logs.
-
-### Identity-bound packages: bind a message to an identity
+`vault/app.py` always prompts for the passphrase via `getpass`. There is
+currently no environment-variable bypass built into the CLI; for scripting,
+pipe the passphrase in on stdin instead (`getpass` falls back to a plain
+stdin read, with a warning, when stdin isn't a terminal):
 
 ```bash
-cd identity_bound_packages
+printf 'my-passphrase\n' | python -m vault.app --vault vault.json list
+```
+
+### Packages: bind a payload to a set of recipient identities
+
+```bash
+cd packages
 python main.py demo
 ```
 
-The demo creates an identity, seals a package to it, records a custody transfer,
-opens it, then shows a wrong passphrase being refused. It performs three BSR2
-derivations, so it takes several minutes end to end.
+The demo creates a package sealed to one identity, adds a second recipient,
+opens it, and prints its custody chain. It performs real BSR2 derivations, so
+it takes a little while end to end.
 
-Creating a package requires every recipient's identity to be **unlocked**, which
-is a consequence of symmetric-only crypto rather than an oversight; see
-`identity_bound_packages/package.py`.
+Creating a package requires every recipient's identity to be **unlocked**,
+which is a consequence of symmetric-only crypto rather than an oversight; see
+`packages/package.py`.
 
----
-
-## Security Model
+### Security Model
 
 These tools provide identity-based authorization, integrity checking, custody
-tracking, and audit logging across four local biometric modes: face images
-(PGM or PNG), voice recordings (PCM WAV), fingerprint images (PNG), and
-video FaceID recordings (uncompressed AVI).
+tracking, and audit logging across three local biometric modes: voice
+recordings (PCM WAV), fingerprint images (PGM/PNG), and video (a minimal,
+custom frame-sequence container, not a standard video format).
 
-### Confidentiality
+#### Confidentiality
 
-Confidentiality is provided by **BSR2**
-([BrisartSecurityResearch](https://github.com/JasonBrisart/BrisartSecurityResearch)),
-vendored unmodified in `bsr2_vendor/` and pinned by digest in
+Confidentiality is provided by **BSR2** ([BrisartSecurityResearch](https://github.com/JasonBrisart/BrisartSecurityResearch)),
+vendored unmodified in `vendor/` and pinned by digest in
 `tests/test_bsr2_vendor_integrity.py`. No cryptographic primitive is
 implemented in this repository, and there are still zero third-party
 dependencies: BSR2 is standard library only, as is everything here.
@@ -333,7 +297,7 @@ What is encrypted at rest:
 | Data | Protected under | Notes |
 | --- | --- | --- |
 | Vault record values | Passphrase-derived master key | Record *shells* (id, kind, label, timestamps) stay readable |
-| LabID biometric templates | Local device key | Bound to identity id + modality |
+| Biometric templates | Local device key | Bound to identity id + modality |
 | Package payloads | Per-package random content key | Content key wrapped once per recipient |
 
 Every sealed object is bound to a **context string** naming what it is, so a
@@ -348,9 +312,8 @@ measured at roughly 85-90 seconds per derivation on the development machine, at
 BSR2's enforced 10,000-iteration minimum. Rather than pay that per operation, a
 random 32-byte master key is wrapped under the passphrase and again under an
 offline recovery code, so unlocking costs one derivation per session and every
-subsequent operation is fast. Vault `init` derives both wrappers and so takes
-about three minutes. **Losing both the passphrase and the recovery code is
-unrecoverable by design.**
+subsequent operation is fast. **Losing both the passphrase and the recovery
+code is unrecoverable by design.**
 
 The iteration count is recorded in the keyring header and validated on read, so
 editing it downward to force a cheap derivation is rejected rather than honoured.
@@ -359,66 +322,57 @@ Factor protection is split by input entropy: low-entropy secrets (passphrases,
 spoken phrases) get the slow KDF, while high-entropy ones (template digests,
 signature blobs) get a fast keyed MAC under the master key. Stretching a
 high-entropy input buys nothing; applying a fast MAC to a low-entropy one is a
-real weakness. See `brisart_bsr2/factors.py`.
+real weakness. See `crypto/factors.py`.
 
 Digest comparisons use constant-time equality, so verification does not leak
 match length through timing. Online guessing is bounded by a caller-persisted
-attempt limiter (`brisart_bsr2/throttle.py`).
+attempt limiter (`crypto/throttle.py`).
 
-### What this does not protect against
+#### What this does not protect against
 
 Stated plainly rather than left implied:
 
-- **Vault record labels are readable while locked.** Listing and searching work
-  without unlocking, so the vault reveals that a record labelled `bank-login`
-  exists while protecting its value. Hiding labels would require decrypting
-  every record for any lookup.
-- **The LabID device key sits beside the data it protects.** LabID is an
-  unattended verification service with no human present to enter a passphrase,
-  so anyone with filesystem read access to its data directory can decrypt every
-  template. Use an encrypted volume or restrictive file permissions if that
-  matters. See `LabID_Beta/identity/device_key.py`.
+- **The biometrics device key sits beside the data it protects.** Biometrics
+  runs as an unattended verification service with no human present to enter a
+  passphrase, so anyone with filesystem read access to its data directory can
+  decrypt every template. Use an encrypted volume or restrictive file
+  permissions if that matters. See `biometrics/identity/device_key.py`.
 - **Package creation requires every recipient unlocked.** BSR2 is symmetric and
   this project takes no third-party dependencies, so there is no public-key
   mechanism to seal a payload to a recipient the creator cannot open.
-- **The package `signature` field is a shared-secret hash, not a digital
-  signature.** It detects alteration; it does not prove origin.
+- **The package custody chain is tamper-evident, not a digital signature.**
+  Each entry's `actor_label` is a caller-supplied string, not cryptographically
+  bound to a signing key. Editing, deleting, or reordering a past entry breaks
+  the hash chain and is detectable, but the chain does not *prove* who
+  performed an action at the time it happened.
 - **Biometric matching is threshold-based on hand-rolled DSP features**, not a
-  trained model. Liveness is enforced as a gate for video, but these are
-  research-grade matchers.
+  trained model.
 
 Upstream BSR2's own `SECURITY.md` states it is research software and should not
 be used as the sole protection for credentials, identity records, or recovery
 secrets. That caveat applies here too. Full threat model:
-[`docs/BSR2_INTEGRATION.md`](docs/BSR2_INTEGRATION.md).
+[docs/BSR2_INTEGRATION.md](docs/BSR2_INTEGRATION.md).
 
-### Key material and the repository
+#### Key material and the repository
 
 `device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories
 are gitignored. A device key decrypts every template in its directory, so it
 must never be committed.
-
----
 
 ## Repository Status
 
 Active Research Project.
 
 This repository is intended for experimentation, education, research, and local identity workflows.
-
 Features may change as new ideas and research directions emerge.
-
----
 
 ## License
 
 See LICENSE file for repository licensing information.
 
----
-
 ## Brisart Ecosystem
 
-```text
+```
 BrisartIdentityTools
         │
         ▼
@@ -429,3 +383,4 @@ Brisart Research Archive
         │
         ▼
 BrisartPreservationTools
+```

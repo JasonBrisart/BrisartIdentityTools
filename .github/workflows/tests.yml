@@ -1,14 +1,11 @@
 name: tests
-
 on:
   push:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   test:
     name: unittest (py${{ matrix.python-version }})
@@ -17,17 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
       - name: Run all test suites
         run: python run_tests.py
-
       - name: Verify the tests left no artifacts behind
         run: |
           if [ -n "$(git status --porcelain)" ]; then
@@ -35,167 +28,139 @@ jobs:
             git status --porcelain
             exit 1
           fi
-
   lint:
     name: ruff
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install ruff
         run: pip install ruff==0.6.9
-
       - name: Lint
         run: ruff check .
-
   smoke:
     name: CLI smoke test
     runs-on: ubuntu-latest
     # The vault and package CLIs each run BSR2's deliberately slow passphrase
-    # derivation (~3 min per derivation on CI-class hardware). The default
+    # derivation (~1 minute per derivation on CI-class hardware). The default
     # 360-minute limit is far more than needed, but the job is slow by design
     # and should not be mistaken for a hang.
     timeout-minutes: 60
-
-    env:
-      # Non-interactive passphrase for the vault CLI. Without this the CLI falls
-      # back to getpass and the job blocks forever on a prompt no one can answer.
-      # A throwaway value for a throwaway vault; see IdentityVault_beta/app.py
-      # for why an environment variable is the wrong choice outside CI.
-      IDENTITY_VAULT_PASSPHRASE: ci-smoke-passphrase
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: LabID face PNG round trip
-        working-directory: LabID_Beta
+      # --- biometrics ---------------------------------------------------
+      - name: Biometrics sample generation and multi-modal enroll/verify round trip
+        working-directory: biometrics
         run: |
           set -euo pipefail
-          python app.py make-samples
-          python app.py enroll ci-face "CI Face" data/samples/sample_face_enroll.png --modality face
-          python app.py verify ci-face data/samples/sample_face_verify_close.png --modality face
-          python app.py verify ci-face data/samples/sample_face_verify_far.png --modality face
+          python app.py make-samples ci-enroll
+          python app.py make-samples ci-other
+          python app.py enroll ci-person --label "CI Person" \
+            --voice data/samples/ci-enroll_voice.wav \
+            --fingerprint data/samples/ci-enroll_fingerprint.pgm \
+            --video data/samples/ci-enroll_video.brvid
+          python app.py verify ci-person \
+            --voice data/samples/ci-enroll_voice.wav \
+            --fingerprint data/samples/ci-enroll_fingerprint.pgm \
+            --video data/samples/ci-enroll_video.brvid
           python app.py list
-          python app.py inspect ci-face
-
-      - name: LabID voice WAV round trip
-        working-directory: LabID_Beta
+          python app.py inspect ci-person
+      - name: Biometrics verification rejects a different identity's samples
+        working-directory: biometrics
         run: |
-          set -euo pipefail
-          python app.py enroll ci-voice "CI Voice" data/samples/sample_voice_enroll.wav --modality voice
-          python app.py verify ci-voice data/samples/sample_voice_verify_close.wav --modality voice
-          python app.py verify ci-voice data/samples/sample_voice_verify_far.wav --modality voice
-
-      - name: LabID fingerprint PNG round trip
-        working-directory: LabID_Beta
-        run: |
-          set -euo pipefail
-          python app.py enroll ci-finger "CI Finger" data/samples/sample_fingerprint_enroll.png --modality fingerprint
-          python app.py verify ci-finger data/samples/sample_fingerprint_verify_close.png --modality fingerprint
-          python app.py verify ci-finger data/samples/sample_fingerprint_verify_far.png --modality fingerprint
-
-      - name: LabID video FaceID round trip
-        working-directory: LabID_Beta
-        run: |
-          set -euo pipefail
-          python app.py enroll ci-video "CI Video" data/samples/sample_video_enroll.avi --modality video
-          python app.py verify ci-video data/samples/sample_video_verify_close.avi --modality video
-          python app.py verify ci-video data/samples/sample_video_verify_far.avi --modality video
-
-      - name: LabID video recording round trip
-        working-directory: LabID_Beta
-        run: |
-          set -euo pipefail
-          python app.py record-video /tmp/ci_recording.avi \
-            data/samples/sample_face_enroll.png \
-            data/samples/sample_face_verify_close.png \
-            data/samples/sample_face_enroll.png \
-            data/samples/sample_face_verify_close.png
-          python app.py probe-video /tmp/ci_recording.avi
-          python app.py enroll ci-recorded "CI Recorded" /tmp/ci_recording.avi --modality video
-          python app.py verify ci-recorded /tmp/ci_recording.avi --modality video
-
-      - name: Photo replay is rejected by the liveness gate
-        working-directory: LabID_Beta
-        run: |
-          set -euo pipefail
-          # A recording of a still photo scores a near-perfect face match, so
-          # only the liveness gate can stop it. Assert on the reported result.
-          result=$(python app.py verify ci-video \
-            data/samples/sample_video_photo_replay.avi --modality video \
-            | awk -F': ' '/^Result:/ {print $2}')
-          if [ "$result" != "LIVENESS_FAILED" ]; then
-            echo "Expected LIVENESS_FAILED for a static photo replay, got: $result"
+          if python app.py verify ci-person \
+              --voice data/samples/ci-other_voice.wav \
+              --fingerprint data/samples/ci-other_fingerprint.pgm \
+              --video data/samples/ci-other_video.brvid; then
+            echo "Expected a mismatched multi-modal probe to fail verification"
             exit 1
           fi
-          echo "Photo replay correctly gated."
-
-      - name: Static video enrollment is refused without --allow-static
-        working-directory: LabID_Beta
+          echo "Mismatched probe correctly rejected."
+      - name: Re-enrolling an existing identity is refused
+        working-directory: biometrics
         run: |
-          if python app.py enroll ci-static "CI Static" \
-              data/samples/sample_video_photo_replay.avi --modality video; then
-            echo "Expected static video enrollment to be refused"
+          if python app.py enroll ci-person --label "Someone Else" \
+              --voice data/samples/ci-other_voice.wav; then
+            echo "Expected re-enrollment to fail for an existing identity"
             exit 1
           fi
-          python app.py enroll ci-static "CI Static" \
-            data/samples/sample_video_photo_replay.avi --modality video --allow-static
-          echo "Static enrollment gated, override works."
-
-      - name: Re-enrollment is refused without --overwrite
-        working-directory: LabID_Beta
-        run: |
-          if python app.py enroll ci-face "Someone Else" \
-              data/samples/sample_face_verify_far.png --modality face; then
-            echo "Expected re-enrollment to fail without --overwrite"
-            exit 1
-          fi
-          echo "Re-enrollment correctly refused."
-
-      - name: Re-enrollment succeeds with --overwrite
-        working-directory: LabID_Beta
+          echo "Re-enrollment correctly refused; delete the identity first to replace it."
+      - name: Deleting and re-enrolling an identity replaces its template
+        working-directory: biometrics
         run: |
           set -euo pipefail
-          python app.py enroll ci-face "CI Face Renewed" \
-            data/samples/sample_face_verify_far.png --modality face --overwrite
-
+          python app.py delete ci-person
+          python app.py enroll ci-person --label "CI Person Renewed" \
+            --voice data/samples/ci-other_voice.wav
       - name: Invalid identity ids are rejected
-        working-directory: LabID_Beta
+        working-directory: biometrics
         run: |
-          if python app.py enroll "ci/user" "Bad Id" \
-              data/samples/sample_face_enroll.png --modality face; then
+          # BUG FIX (2026-08-24): the previous invocation
+          #   python app.py enroll "ci/user" "Bad Id" --voice ...
+          # passed "Bad Id" as a second, unrecognized positional argument.
+          # biometrics/app.py's enroll subcommand takes exactly ONE positional
+          # (identity_id) plus a REQUIRED --label flag, so argparse itself
+          # rejected the command with exit code 2 before ever reaching
+          # identity_store._validate_identity_id -- the path-traversal /
+          # invalid-character validation this step is named for was never
+          # actually exercised. The step still reported success because it
+          # only checked "did the command fail", regardless of *why*.
+          # This corrected invocation uses the real CLI signature so the
+          # command reaches enroll's identity_id validation and is rejected
+          # for the right reason.
+          #
+          # NOTE: this fix previously landed in a stray tests.yml at the
+          # repository root instead of here, in .github/workflows/tests.yml
+          # -- GitHub Actions only reads workflows from .github/workflows/,
+          # so the earlier fix never actually took effect in CI. The stray
+          # root-level tests.yml should be deleted once this file is
+          # committed, so there is only one copy of this workflow.
+          if python app.py enroll "ci/user" --label "Bad Id" \
+              --voice data/samples/ci-enroll_voice.wav; then
             echo "Expected an invalid identity id to be rejected"
             exit 1
           fi
           echo "Invalid identity id correctly rejected."
 
-      - name: IdentityVault round trip
+      # --- vault ----------------------------------------------------------
+      # vault/app.py always prompts via getpass. getpass falls back to a plain
+      # stdin read (with a warning) when stdin isn't a TTY, which is the case
+      # here, so piping the passphrase in works without needing an env-var
+      # bypass in the CLI itself.
+      - name: Vault round trip
         run: |
           set -euo pipefail
-          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json init
-          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json add \
-            --kind identity --label "CI  Record" --value "ci-value"
-          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json list
-          python -m IdentityVault_beta.app --vault /tmp/ci_vault.json verify
-
-      - name: Duplicate vault labels are refused
+          printf 'ci-smoke-passphrase\nci-smoke-passphrase\n' \
+            | python -m vault.app --vault /tmp/ci_vault.json init
+          printf 'ci-smoke-passphrase\n' \
+            | python -m vault.app --vault /tmp/ci_vault.json upsert \
+                "CI  Record" --kind identity --payload '{"value": "ci-value"}' \
+                --record-id ci-record
+          python -m vault.app --vault /tmp/ci_vault.json list
+          printf 'ci-smoke-passphrase\n' \
+            | python -m vault.app --vault /tmp/ci_vault.json get ci-record
+      - name: Re-upserting an existing record id updates it in place
         run: |
-          if python -m IdentityVault_beta.app --vault /tmp/ci_vault.json add \
-              --kind identity --label "CI  Record" --value "again"; then
-            echo "Expected a duplicate label to be rejected"
+          set -euo pipefail
+          before=$(python -m vault.app --vault /tmp/ci_vault.json list | wc -l)
+          printf 'ci-smoke-passphrase\n' \
+            | python -m vault.app --vault /tmp/ci_vault.json upsert \
+                "CI  Record" --kind identity --payload '{"value": "again"}' \
+                --record-id ci-record
+          after=$(python -m vault.app --vault /tmp/ci_vault.json list | wc -l)
+          if [ "$before" != "$after" ]; then
+            echo "Expected re-upserting an existing record id to update in place, not add a record"
             exit 1
           fi
-          echo "Duplicate label correctly rejected."
+          echo "Record correctly updated in place instead of duplicated."
 
-      - name: Identity-bound package demo
-        working-directory: identity_bound_packages
+      # --- packages ---------------------------------------------------------
+      - name: Package demo
+        working-directory: packages
         run: python main.py demo

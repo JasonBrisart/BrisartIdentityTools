@@ -7,7 +7,7 @@ should read before trusting any claim made elsewhere in the repository.
 ## What is vendored, and why
 
 The cryptography is [BSR2](https://github.com/JasonBrisart/BrisartSecurityResearch)
-(Brisart Security Research, scheme 2), vendored **unmodified** in `bsr2_vendor/`:
+(Brisart Security Research, scheme 2), vendored **unmodified** in `vendor/`:
 
 | File | Role |
 | --- | --- |
@@ -16,7 +16,7 @@ The cryptography is [BSR2](https://github.com/JasonBrisart/BrisartSecurityResear
 | `brisart_security_drbg.py` | Deterministic random bit generator |
 | `brisart_security_entropy.py` | Operating-system entropy collection |
 
-No cryptographic primitive is implemented in this repository. `brisart_bsr2/` is
+No cryptographic primitive is implemented in this repository. `crypto/` is
 an integration layer only.
 
 Vendored rather than depended on, for three reasons: the repository's
@@ -24,16 +24,19 @@ zero-dependency rule is absolute, the vendored files are standard-library only
 so vendoring costs nothing, and pinning the exact bytes means an upstream change
 cannot silently alter what this repository ships.
 
-The files are byte-identical to upstream commit
-`656d962c447b7ac69d76b717820c34ae8e56b38a` and pinned by SHA-256 in
-`tests/test_bsr2_vendor_integrity.py`. That test fails if any vendored byte
-changes. They use flat imports of each other exactly as upstream does; rather
-than edit them into package-relative imports (which would fork the code and
-break the pin), `brisart_bsr2/vendor.py` puts `bsr2_vendor/` on `sys.path` once
-and re-exports. One place to audit instead of scattered path edits.
+The files are intended to be byte-identical to a pinned upstream commit and
+verified by a dedicated digest test. **Note:** at the time of this audit, no
+such integrity test (`test_bsr2_vendor_integrity.py` or equivalent) exists
+anywhere in the current tree — it appears to have been dropped during the
+recent restructuring and should be re-added before relying on this claim.
 
-`bsr2_vendor/` is excluded from lint, so a lint autofix cannot break the digest
-pin.
+They use flat imports of each other exactly as upstream does; rather than edit
+them into package-relative imports (which would fork the code and break any
+future digest pin), `crypto/vendor.py` puts `vendor/` on `sys.path` once and
+re-exports. One place to audit instead of scattered path edits.
+
+`vendor/` should be excluded from lint, so a lint autofix cannot break a
+future digest pin.
 
 ## Upstream's own caveat
 
@@ -86,14 +89,8 @@ which would otherwise make the KDF trivially brute-forceable.
 
 ## Factor protection is split by entropy
 
-The previous implementation hashed every factor with unsalted single-pass
-SHA-256. Two concrete failures: identical factors produced identical digests, so
-stored values revealed which identities shared a passphrase and one precomputed
-table cracked all of them; and SHA-256 runs billions of times per second on a
-GPU, so any factor from a realistic wordlist fell immediately.
-
-Both are fixed, but not by the same mechanism, because the factors are not the
-same kind of secret:
+Both are fixed by treating factors differently based on entropy, because they
+are not the same kind of secret:
 
 | Input | Treatment | Cost | Rationale |
 | --- | --- | --- | --- |
@@ -105,33 +102,26 @@ applying a fast MAC to a low-entropy one is a real weakness. Each factor gets
 the treatment its entropy calls for. A package verifying several factors would
 otherwise cost minutes per open and hours across the test suite.
 
-Each factor name derives a distinct subkey, so a template bound as `face` cannot
-be replayed into the `fingerprint` slot. Name and value are length-framed before
-MAC'ing, so bytes cannot be shifted across the boundary to collide.
+Each factor name derives a distinct subkey, so a template bound as `voice`
+cannot be replayed into the `fingerprint` slot. Name and value are
+length-framed before MAC'ing, so bytes cannot be shifted across the boundary
+to collide.
 
-`hash_text` / `hash_bytes` remain in use as **integrity digests only** — never
-for secrets.
+See `crypto/factors.py`.
 
 ## Context binding
 
-Every sealed object is bound to a canonical context string naming what it is:
-
-```
-record|<record_id>|<kind>|<label>
-template|<identity_id>|<modality>
-package|<package_id>
-key-slot|<package_id>|<identity_id>
-keyring|<wrapper>
-```
-
-BSR2 authenticates the context alongside the ciphertext, so a moved envelope
-fails authentication instead of decrypting into the wrong slot. This is what
-makes cross-identity substitution detectable: a template sealed for
-`researcher_001` cannot be dropped into `researcher_002`'s file, and a vault
-record's payload cannot be swapped with another record's.
+Every sealed object is bound to a canonical context string naming what it is,
+for example a vault record, a biometric template, a package payload, a
+per-recipient key slot, or a keyring wrapper. BSR2 authenticates the context
+alongside the ciphertext, so a moved envelope fails authentication instead of
+decrypting into the wrong slot. This is what makes cross-identity substitution
+detectable: a template sealed for one identity cannot be dropped into another
+identity's record, and a vault record's payload cannot be swapped with another
+record's.
 
 `|` and NUL are rejected inside field values, so no combination of field
-contents can forge a different context.
+contents can forge a different context. See `crypto/context.py`.
 
 ## Length-hiding padding
 
@@ -147,7 +137,8 @@ fell into.
 
 The padding sits **inside** the BSR2 plaintext, so it is covered by the
 authentication tag. Length recovery happens only after the tag verifies, which
-means a forged envelope can never steer the unpadding logic.
+means a forged envelope can never steer the unpadding logic. See
+`crypto/envelope.py`.
 
 ## DRBG lifecycle
 
@@ -156,7 +147,7 @@ deliberately does not create one, leaving seeding to the caller. BSR2's DRBG
 expands seed material but cannot create entropy, so a weak seed means weak salts
 and nonces regardless of expansion quality.
 
-`brisart_bsr2/rng.py` seeds from `secrets.token_bytes` at 128 bytes (double
+`crypto/rng.py` seeds from `secrets.token_bytes` at 128 bytes (double
 upstream's 64-byte minimum) and wraps the generator so upstream's lifecycle
 limits trigger a transparent reseed from fresh OS entropy rather than a hard
 failure. Upstream raises at those limits by design; a long-lived enrollment
@@ -168,7 +159,7 @@ instance would raise forever.
 
 The slow KDF raises the cost of *offline* guessing but does nothing about an
 attacker calling a verify function in a loop against a running process.
-`brisart_bsr2/throttle.py` provides an `AttemptLimiter` for that.
+`crypto/throttle.py` provides an `AttemptLimiter` for that.
 
 Limiter state is **persisted by the caller**, not held in memory. An in-memory
 counter resets whenever the process restarts, which an attacker controls for
@@ -177,7 +168,7 @@ free.
 ## Error handling
 
 Callers only ever need to catch `Bsr2IntegrationError` and its subclasses, never
-a vendor exception type. `brisart_bsr2/envelope.py` catches the vendored
+a vendor exception type. `crypto/envelope.py` catches the vendored
 `BrisartEnvelopeError` and re-raises `EnvelopeAuthenticationError`, preserving
 the original as `__cause__`.
 
@@ -193,7 +184,7 @@ verify" as a security event.
 
 ## What is protected, per tool
 
-### IdentityVault_beta
+### Vault
 
 Record **payloads** are sealed under the vault master key. Record **shells** —
 `record_id`, `kind`, `label`, timestamps — stay readable in the clear.
@@ -202,24 +193,16 @@ That is a deliberate trade. The vault leaks that a record labelled `bank-login`
 exists while protecting its value. Encrypting labels would require decrypting
 every record for any lookup, making the CLI unusable for listing and searching.
 
-Vaults may also be initialised with a caller-supplied `master_key`, producing a
-vault with **no keyring** that cannot be unlocked by passphrase. This exists so
-tests and known-answer vectors avoid a multi-minute derivation. It is not for
-real data: the key has to live somewhere, and if that somewhere is a script next
-to the vault file, the encryption achieves nothing.
+### Biometrics
 
-Legacy plaintext vaults still load and are migrated to sealed storage on write.
-
-### LabID_Beta
-
-Biometric templates are sealed under a **local device key**
-(`LabID_Beta/identity/device_key.py`), bound to identity id and modality.
+Biometric templates are sealed under a local **device key**
+(`biometrics/identity/device_key.py`), bound to identity id and modality.
 Identity records stay readable so `list` and `inspect` work without the key.
 
-Why a device key rather than a passphrase: LabID is an unattended local
-verification service. Nobody is present at unlock time, and the CLI is invoked
-repeatedly (about twenty times in CI alone), so a ~90-second derivation per
-invocation would make it unusable.
+Why a device key rather than a passphrase: biometrics runs as an unattended
+local verification service. Nobody is present at unlock time, and the CLI is
+invoked repeatedly in CI, so a ~90-second derivation per invocation would make
+it unusable.
 
 The device key is 32 random bytes, created on first use with mode `0600` via
 `os.open` so it is never briefly world-readable, and the loader warns if the mode
@@ -236,11 +219,7 @@ template. That is inherent to unattended operation, not a defect to be fixed by
 relocating the file. Use an encrypted volume or restrict the directory to the
 service account if that matters.
 
-Legacy plaintext templates still load, flagged
-`storage_protection: unprotected_legacy_plaintext`, and are re-sealed on next
-write.
-
-### identity_bound_packages
+### Packages
 
 A random per-package **content key** encrypts the payload once. That content key
 is then wrapped once per recipient under each recipient's master key. Opening
@@ -254,23 +233,24 @@ public-key mechanism to seal a payload to a recipient the creator cannot open.
 Adding a recipient later needs that recipient unlocked. This is a real
 limitation of symmetric-only crypto.
 
-The `signature` field remains a **shared-secret hash, not a digital signature**.
-It detects alteration and covers the wrapped content keys, so a recipient slot
-cannot be added, removed, or swapped without invalidating it. It does **not**
-prove origin and must not be relied on for that.
+Package integrity is provided by an internal, hash-chained **custody chain**
+(`packages/custody.py`), not a separate signature field: every lifecycle event
+(created, recipient added/removed, opened) commits to the previous event's
+hash, so editing, deleting, or reordering a past entry is detectable. This is
+tamper-evidence, not proof of origin — the `actor_label` recorded in each
+entry is a caller-supplied string, not cryptographically bound to a signing
+key.
 
-Pre-BSR2 plaintext packages are refused rather than opened, with a message
-saying their payload was never encrypted and they must be re-created.
-
-Open order matters: cheap structural checks (format, signature, custody chain,
+Open order matters: cheap structural checks (format, custody chain,
 authorization, key-slot presence) run before expensive factor verification, so a
 tampered package is rejected without paying for a derivation.
 
 ## Key material and the repository
 
-`device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories are
-gitignored. A device key decrypts every template in its directory; an identity
-file holds a keyring. None belong in version control.
+`device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories
+under `biometrics/`, `vault/`, and `packages/` are gitignored. A device key
+decrypts every template in its directory; an identity file holds a keyring.
+None belong in version control.
 
 ## Residual risks
 
@@ -284,9 +264,9 @@ file holds a keyring. None belong in version control.
    dump.
 4. **Vault labels readable while locked.** Metadata disclosure, accepted for
    usability.
-5. **LabID device key co-located with its data.** Documented above.
+5. **Biometrics device key co-located with its data.** Documented above.
 6. **No forward secrecy.** Compromising a master key exposes everything ever
    sealed under it.
 7. **Biometric matching is threshold-based hand-rolled DSP**, not a trained
-   model. Liveness is enforced as a gate for video, but these are research-grade
-   matchers, not production biometrics.
+   model, and there is no liveness/anti-spoofing gate in the current
+   implementation.
