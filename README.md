@@ -68,115 +68,17 @@ Identity is intentionally broader than just people.
 
 ---
 
-## Current Research Areas
+## The Three Tools
 
-### Identity Records
-Create and manage local identity records.
+| Tool | What it does |
+| --- | --- |
+| **Vault** (`vault/`) | An encrypted, local, single-file record store. Record values are sealed; record shells stay readable so the vault lists without unlocking. Also seals arbitrary files, folders, and drives. |
+| **Biometrics** (`biometrics/`) | Local multimodal biometric enrollment and verification (voice / fingerprint / video), with sealed templates and arbitrary file attachments. |
+| **Packages** (`packages/`) | Identity-Bound Packages: content sealed so only a specific set of recipient identities can open it, with a tamper-evident custody chain. |
 
-Examples:
-- User identities
-- Device identities
-- Research identities
-- Service identities
-
----
-
-### Credential Verification
-Validate locally stored credentials.
-
-Examples:
-- Password verification
-- Passphrase verification
-- Credential comparison
-- Authentication records
-
----
-
-### Physical Identity Tokens
-Explore possession-based identity systems.
-
-Examples:
-- USB authentication tokens
-- Offline access tokens
-- Removable media credentials
-- Physical verification workflows
-
----
-
-### Verification Reports
-Generate verification reports showing:
-- Verification status
-- Validation results
-- Timestamp information
-- Audit details
-
----
-
-### Local Trust Models
-Research methods for establishing trust without relying on cloud infrastructure.
-
-Examples:
-- Local trust stores
-- Credential manifests
-- Verification chains
-- Offline validation systems
-
----
-
-## Future Research
-
-Potential future experiments include:
-
-### Multi-Factor Authentication
-Combining multiple local authentication methods.
-
-Examples:
-- Password + token
-- Passphrase + removable media
-- Device + credential verification
-
-### Smart Card Integration
-Exploration of offline credential devices.
-
-### Certificate-Based Workflows
-Local certificate generation and validation.
-
-### Air-Gapped Authentication
-Authentication methods designed for isolated environments.
-
-### Biometric Research
-Identity experiments using local biometric methods.
-
-Potential examples:
-- Voice and fingerprint verification research
-- Identity template comparison
-- Offline biometric experiments
-
-Experimental biometric features should not be considered production security systems without independent validation and testing.
-
----
-
-## Philosophy
-
-BrisartIdentityTools follows a simple belief:
-
-> Ownership should include identity.
-
-If software, archives, and research can be controlled locally, identity should be capable of the same.
-
-The objective is not to replace enterprise authentication platforms.
-The objective is to explore transparent, understandable, and locally controlled identity systems.
-
----
-
-## Repository Goals
-
-- Build understandable identity tools.
-- Promote local-first workflows.
-- Remain dependency-conscious.
-- Encourage auditability.
-- Support offline environments.
-- Experiment responsibly.
+All three share a common utility layer (`common/`), a BSR2 integration layer
+(`crypto/`), vendored BSR2 primitives (`vendor/`), and a Tkinter desktop GUI
+(`gui/`). A single dispatcher (`cli.py`) launches any tool or the GUI.
 
 ---
 
@@ -186,22 +88,37 @@ Python 3.10 or newer. No third-party dependencies.
 
 The floor is 3.10 rather than 3.9 because vendored BSR2 uses `int | None`
 annotations that Python evaluates at import time. Patching the vendored file
-would break byte-identical vendoring and the digest pin that proves it matches
-upstream, so the floor moved instead.
+would break byte-identical vendoring, so the floor moved instead.
 
 ```bash
 git clone https://github.com/JasonBrisart/BrisartIdentityTools.git
 cd BrisartIdentityTools
 ```
 
-### Run the tests
-
-The repository is one flat tree with fully-qualified imports throughout, so one runner drives every suite:
+The repository is one flat tree with fully-qualified imports throughout, so one
+runner drives every suite:
 
 ```bash
 python run_tests.py          # full suite across biometrics, vault, and packages
 python run_tests.py -v       # verbose
 ```
+
+### Unified CLI and desktop GUI
+
+Every tool is reachable through one dispatcher, and the GUI covers all three in
+one window:
+
+```bash
+python cli.py biometrics ...   # local biometric enroll/verify
+python cli.py vault ...         # encrypted record store
+python cli.py package ...       # identity-bound packages
+python cli.py gui               # launch the desktop GUI (also: python -m gui.app)
+python cli.py version           # print the ecosystem version
+python cli.py help
+```
+
+The commands below use each tool directly; the same commands work through
+`python cli.py <tool> ...`.
 
 ### Biometrics: enroll and verify local voice, fingerprint, and video samples
 
@@ -215,24 +132,21 @@ python app.py enroll jason-1 --label "Jason" \
   --voice data/samples/ci-enroll_voice.wav \
   --fingerprint data/samples/ci-enroll_fingerprint.pgm \
   --video data/samples/ci-enroll_video.brvid
-
 python app.py verify jason-1 \
   --voice data/samples/ci-enroll_voice.wav \
   --fingerprint data/samples/ci-enroll_fingerprint.pgm \
   --video data/samples/ci-enroll_video.brvid           # MATCH
-
 python app.py verify jason-1 \
   --voice data/samples/ci-other_voice.wav \
   --fingerprint data/samples/ci-other_fingerprint.pgm \
   --video data/samples/ci-other_video.brvid             # NO MATCH
-
 python app.py list
 python app.py inspect jason-1
 ```
 
 Re-enrolling an existing identity is refused outright. There is no
-`--overwrite` flag; delete the identity first with `python app.py delete
-jason-1`, then enroll again, if you need to replace its stored template.
+`--overwrite` flag; delete the identity first with `python app.py delete jason-1`,
+then enroll again, if you need to replace its stored template.
 
 ### Vault: store and read local records
 
@@ -262,6 +176,9 @@ stdin read, with a warning, when stdin isn't a terminal):
 printf 'my-passphrase\n' | python -m vault.app --vault vault.json list
 ```
 
+To seal whole files, folders, or drives into the vault, see
+[docs/README_FULL_FILE_ENCRYPTION.md](docs/README_FULL_FILE_ENCRYPTION.md).
+
 ### Packages: bind a payload to a set of recipient identities
 
 ```bash
@@ -277,20 +194,28 @@ Creating a package requires every recipient's identity to be **unlocked**,
 which is a consequence of symmetric-only crypto rather than an oversight; see
 `packages/package.py`.
 
-### Security Model
+---
+
+## Security Model
 
 These tools provide identity-based authorization, integrity checking, custody
 tracking, and audit logging across three local biometric modes: voice
 recordings (PCM WAV), fingerprint images (PGM/PNG), and video (a minimal,
 custom frame-sequence container, not a standard video format).
 
-#### Confidentiality
+### Confidentiality
 
 Confidentiality is provided by **BSR2** ([BrisartSecurityResearch](https://github.com/JasonBrisart/BrisartSecurityResearch)),
-vendored unmodified in `vendor/` and pinned by digest in
-`tests/test_bsr2_vendor_integrity.py`. No cryptographic primitive is
-implemented in this repository, and there are still zero third-party
-dependencies: BSR2 is standard library only, as is everything here.
+vendored unmodified in `vendor/`. No cryptographic primitive is implemented in
+this repository, and there are still zero third-party dependencies: BSR2 is
+standard library only, as is everything here.
+
+> **Note:** the digest-pin test that verified `vendor/` was byte-identical to
+> upstream (`tests/test_bsr2_vendor_integrity.py`) was dropped during the 1.0.0
+> restructure and has not yet been recreated. Until it (or an equivalent digest
+> check) is re-added, an accidental edit to `vendor/` will not be caught by CI.
+> Re-adding it is an open item — see `docs/BSR2_INTEGRATION.md` and
+> `vendor/README.md`.
 
 What is encrypted at rest:
 
@@ -328,7 +253,7 @@ Digest comparisons use constant-time equality, so verification does not leak
 match length through timing. Online guessing is bounded by a caller-persisted
 attempt limiter (`crypto/throttle.py`).
 
-#### What this does not protect against
+### What this does not protect against
 
 Stated plainly rather than left implied:
 
@@ -346,33 +271,41 @@ Stated plainly rather than left implied:
   the hash chain and is detectable, but the chain does not *prove* who
   performed an action at the time it happened.
 - **Biometric matching is threshold-based on hand-rolled DSP features**, not a
-  trained model.
+  trained model, and there is no liveness / anti-spoofing gate.
 
 Upstream BSR2's own `SECURITY.md` states it is research software and should not
 be used as the sole protection for credentials, identity records, or recovery
 secrets. That caveat applies here too. Full threat model:
 [docs/BSR2_INTEGRATION.md](docs/BSR2_INTEGRATION.md).
 
-#### Key material and the repository
+### Key material and the repository
 
 `device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories
 are gitignored. A device key decrypts every template in its directory, so it
 must never be committed.
 
+---
+
 ## Repository Status
 
-Active Research Project.
+Active research project, at its first production/stable release (1.0.0).
 
-This repository is intended for experimentation, education, research, and local identity workflows.
-Features may change as new ideas and research directions emerge.
+"Production/stable" describes the code's own maturity — stable formats, a full
+test suite, and no data migration between releases — not an assurance about the
+underlying research cryptography, which remains unreviewed (see the Security
+Model above). Features may still change as new research directions emerge.
+
+---
 
 ## License
 
 See LICENSE file for repository licensing information.
 
+---
+
 ## Brisart Ecosystem
 
-```
+```text
 BrisartIdentityTools
         │
         ▼

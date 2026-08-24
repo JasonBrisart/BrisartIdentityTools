@@ -30,8 +30,14 @@ Vault is intended to provide:
 ## Storage Model
 
 Encryption is [BSR2](https://github.com/JasonBrisart/BrisartSecurityResearch),
-vendored byte-identical in `vendor/` at the repository root and pinned by
-digest. No cryptographic primitive is implemented here.
+vendored byte-identical in `vendor/` at the repository root. No cryptographic
+primitive is implemented here.
+
+> **Note:** the digest-pin test that used to verify `vendor/` is byte-identical
+> to upstream (`tests/test_bsr2_vendor_integrity.py`) was dropped during the
+> 1.0.0 restructure and has not yet been recreated. Until it is, an accidental
+> edit to `vendor/` will not be caught by CI. See `vendor/README.md` and
+> `docs/BSR2_INTEGRATION.md`.
 
 A vault holds a **keyring**: a random 32-byte master key, sealed once under a
 passphrase-derived key and once under an offline recovery code. Record payloads
@@ -79,6 +85,11 @@ label, so a ciphertext cannot be moved between records without failing
 authentication. Plaintext is padded to 256-byte blocks before sealing, so
 ciphertext length does not reveal the exact length of a stored value.
 
+Files, folders, and whole drives can also be sealed into the vault as file
+records and chunked bundles (any size), via the `encrypt-file` / `encrypt-paths`
+CLI commands or the GUI's "Files / Folders / Drives" tab. See
+[docs/README_FULL_FILE_ENCRYPTION.md](../docs/README_FULL_FILE_ENCRYPTION.md).
+
 ### What is readable while locked
 
 `record_id`, `kind`, `label`, and timestamps — which is what `list` reports,
@@ -111,7 +122,9 @@ bits of entropy. Write it down and store it offline.
 - **Losing both the passphrase and the recovery code means the vault cannot be
   opened by anyone, including you.** There is no third path, by design.
 
-### Quick Start
+---
+
+## Quick Start
 
 `--vault` is a **global** option, so it goes before the subcommand.
 
@@ -157,6 +170,9 @@ save instead of one per item):
 python -m vault.app --vault data/vaults/main_vault.json batch-upsert items.json
 ```
 
+All commands are also reachable via the repo-root dispatcher, e.g.
+`python cli.py vault --vault data/vaults/main_vault.json list`.
+
 ### Scripting
 
 `vault/app.py` always prompts for the passphrase via `getpass`, and there is
@@ -173,7 +189,7 @@ environment variable would; prefer the interactive prompt for anything real.
 
 ### Repository Layout
 
-```
+```text
 vault/
 ├── app.py
 ├── config/
@@ -186,18 +202,20 @@ vault/
 ├── reports/
 │   └── audit_log.py
 ├── store/
+│   ├── bulk_file_service.py
 │   ├── vault_file.py
 │   └── vault_service.py
 ├── tests/
 └── README.md
 ```
 
-### Status
+## Status
 
-Beta software.
+Part of the 1.0.0 production/stable release. Stored formats are stable; vaults
+written by earlier betas load unchanged.
 
-BSR2 is unreviewed research cryptography. Upstream's `SECURITY.md` states it
-should not be used as the sole protection for credentials, identity records, or
-recovery secrets, and that caveat is inherited here rather than softened. The
+BSR2 itself is unreviewed research cryptography. Upstream's `SECURITY.md` states
+it should not be used as the sole protection for credentials, identity records,
+or recovery secrets, and that caveat is inherited here rather than softened. The
 full threat model, including what this encryption does not protect against, is
 in [docs/BSR2_INTEGRATION.md](../docs/BSR2_INTEGRATION.md).
