@@ -34,7 +34,11 @@ PINNED_DIGESTS = {
 
 
 def _sha256(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Normalize line endings before hashing so a Windows (CRLF) checkout and a
+    # Linux/CI (LF) checkout of the SAME file produce the SAME digest. This is
+    # a byte-exact vendoring pin on CONTENT, not on incidental line endings.
+    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 class VendorIntegrityTests(unittest.TestCase):
