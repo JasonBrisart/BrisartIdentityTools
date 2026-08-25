@@ -1,0 +1,14 @@
+# ==================================================
+# The Brisart Ecosystem
+# ==================================================
+# Freeze the vendored BSR2 files byte-for-byte on every platform. "-text"
+# disables ALL line-ending conversion on checkin and checkout, so what Git
+# stores is exactly what lands on disk on Windows, macOS, and Linux/CI alike --
+# which is what makes the raw-byte SHA-256 pins in
+# tests/test_bsr2_vendor_integrity.py match everywhere instead of only on the
+# machine that produced them.
+vendor/** -text
+
+# Everything else: normal handling, checked out with LF so contributors and CI
+# stay consistent. (Does not affect vendor/, overridden above.)
+* text=auto eol=lf
