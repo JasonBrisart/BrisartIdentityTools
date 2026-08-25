@@ -4,6 +4,73 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.2.0] - 2026-08-25
+
+A GUI architecture release that splits the former single-file desktop interface
+into focused, folder-grouped modules. The visible Vault, Biometrics, and
+Packages workflows remain in one Tkinter window, but the implementation is now
+organized so the window shell, background-operation handling, reusable widgets,
+and each tool tab can be maintained independently.
+
+No stored vault, identity, keyring, biometric-template, attachment, package, or
+custody-chain format changed. There is no data migration.
+
+### Added
+
+- **`app.py`** is now the small root-level GUI entry point. It owns only the main
+  window, notebook assembly, menu bar, About dialog, and `main()`.
+- **`gui/core/constants.py`** centralizes the application title, biometric
+  file-type filters, cancellation sentinel, and repository-root import
+  bootstrap. The root is located by walking upward to `version.py` rather than
+  assuming a fixed directory depth.
+- **`gui/core/busy.py`** centralizes the modal busy dialog and the shared
+  background-operation runner used to keep slow KDF and encrypted-data work
+  from blocking Tkinter's event loop.
+- **`gui/widgets/dialogs.py`** contains reusable modal-dialog helpers instead of
+  repeating dialog construction across tabs.
+- **`gui/widgets/path_panel.py`** contains the shared file, folder, and drive-root
+  selection panel used by bulk Vault and biometric-attachment workflows.
+- **`gui/tabs/tab_vault.py`**, **`gui/tabs/tab_biometrics.py`**, and
+  **`gui/tabs/tab_packages.py`** now own their respective interfaces.
+
+### Changed
+
+- **The desktop GUI is modular instead of monolithic.** The former
+  `gui/app.py` implementation was split by responsibility. The executable shell
+  now lives at the repository root as `app.py`, while reusable GUI code lives
+  under `gui/core/`, `gui/widgets/`, and `gui/tabs/`.
+- **The supported direct GUI launch command is now `python app.py`.** The GUI
+  README and root README now document the actual root entry point and current
+  file layout.
+- **GUI import setup is depth-independent.** Importing
+  `gui.core.constants` establishes the repository root before any tab imports
+  Vault, Biometrics, or Packages modules.
+- **Documentation now matches the split GUI architecture.** `README.md`,
+  `gui/README.md`, and `docs/README_FULL_FILE_ENCRYPTION.md` no longer describe
+  `gui/app.py` or the deleted drag-and-drop module as current files.
+
+### Removed
+
+- **`gui/app.py`** was removed after its responsibilities were divided between
+  the root `app.py` shell and the new GUI submodules.
+- **`gui/windows_dnd.py`** was removed. The 1.2.0 interface uses the shared
+  Tkinter path-selection panel and standard picker dialogs.
+
+### Notes
+
+- The split is architectural. GUI actions still call the existing Vault,
+  Biometrics, and Packages application layers; cryptography, validation,
+  persistence, and identity policy were not reimplemented in the interface.
+- The project remains standard-library only and does not add a GUI dependency.
+- The 1.1.1 vendored-BSR2 digest-pin fix and the 1.1.0 biometric similarity fix
+  remain unchanged.
+- Existing security caveats remain in effect: BSR2 is unreviewed research
+  cryptography, the package custody chain is tamper-evident rather than a
+  digital signature, and losing both a vault passphrase and recovery code is
+  unrecoverable by design.
+
+---
+
 ## [1.1.1] - 2026-08-25
 
 A patch fixing the digest-pin defect that shipped as a documented **Known

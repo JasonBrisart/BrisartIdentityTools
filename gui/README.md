@@ -1,111 +1,133 @@
 # GUI
 
-A single-window Tkinter desktop front-end for all three tools (`vault/`,
-`biometrics/`, `packages/`), added in 1.0.0. Standard library only —
-`tkinter` ships with Python, so this adds no new dependency and keeps the
-zero-third-party-dependency rule intact.
+BrisartIdentityTools includes a standard-library-only Tkinter desktop interface
+for Vault, Biometrics, and Packages. The GUI remains local-first, works without
+cloud services, and adds no third-party dependency.
 
-No logic lives here. Every button calls directly into the same service
-classes and functions the CLIs use (`vault.store.vault_service.VaultService`,
-`biometrics.engine.enrollment`/`verification`, `packages.package`) — this
-module is wiring, not a second implementation of anything.
+Version 1.2.0 replaces the former single-module GUI layout with a small root
+entry point and focused GUI submodules. This keeps the interface easier to
+inspect, test, change, and maintain without duplicating application logic.
 
 ---
 
-## Running it
+## Run the GUI
+
+From the repository root:
 
 ```bash
-python -m gui.app
+python app.py
 ```
 
-or via the unified dispatcher:
+The root-level `app.py` is the GUI application shell. It creates the main
+window, adds the Vault, Biometrics, and Packages tabs, builds the menu bar, and
+starts Tkinter's event loop.
 
-```bash
-python cli.py gui
-```
+---
 
-### Why every slow operation runs on a background thread
-
-BSR2's password KDF is deliberately slow — tens of seconds to a couple of
-minutes per call (see [docs/BSR2_INTEGRATION.md](../docs/BSR2_INTEGRATION.md)).
-Vault init/unlock, the biometrics keyring create/unlock, and every package
-operation all pay that cost. Calling any of them directly from a button
-handler would freeze the whole window for the duration of the derivation,
-which on a GUI reads as a hang rather than "the KDF is working as intended."
-
-`run_in_background()` is the one path every such call goes through: it starts
-a daemon thread, shows a small modal `BusyDialog` with an indeterminate
-progress bar, and polls a `queue.Queue` on the main thread via `after()` until
-the thread finishes. Tkinter widgets are never touched from the background
-thread itself — only the main thread ever calls back into a widget, which is
-what Tkinter requires.
-
-### Layout
+## Layout
 
 ```text
-gui/
-├── app.py          Dialogs, the three tabs, and the App shell
-├── windows_dnd.py  Disabled drag-and-drop shim (see below)
-└── README.md
+app.py
+└── gui/
+    ├── README.md
+    ├── core/
+    │   ├── constants.py
+    │   └── busy.py
+    ├── widgets/
+    │   ├── dialogs.py
+    │   └── path_panel.py
+    └── tabs/
+        ├── tab_vault.py
+        ├── tab_biometrics.py
+        └── tab_packages.py
 ```
 
-`app.py` is kept as one file on purpose. The three tabs share one small set of
-dialog helpers (`TextPromptDialog`, `TextViewDialog`, `BusyDialog`,
-`RecordDialog`, `ModalityPathDialog`), and that surface is small enough that
-splitting it into several modules would add more import boilerplate than the
-tabs themselves contain. Revisiting that split is a reasonable future cleanup,
-but it is not required for correctness.
+### `app.py`
 
-### File / folder / drive selection
+The executable shell only. It owns the main `tk.Tk` window, notebook assembly,
+File and Help menus, About dialog, and `main()` entry point.
 
-Selection is done entirely through `tkinter.filedialog`'s real, standard,
-cross-platform picker dialogs, via the **Add Files...**, **Add Folder...**, and
-**Add Drive...** buttons on the shared `PathSelectionPanel`.
+### `gui/core/constants.py`
 
-Native Windows drag-and-drop is **disabled** in this release. An earlier
-experimental `WM_DROPFILES` hook (`windows_dnd.py`) had a `ctypes` pointer-
-truncation bug that could crash the window, so it was removed rather than
-shipped unverified. `windows_dnd.py` keeps the same public API
-(`is_supported` / `enable_file_drop` / `disable_file_drop`) but is a no-op, so
-`app.py` needs no changes and the Browse buttons remain the guaranteed path.
-See that module's docstring for the full history and the correct fix if
-drag-and-drop is wanted in a future version.
+Provides shared constants and modality file-type filters. It also locates the
+repository root by walking upward until it finds `version.py`, then makes that
+root importable before any tab imports Vault, Biometrics, or Packages.
 
-### Tabs
+### `gui/core/busy.py`
 
-- **Vault** — choose/create a vault file, init, unlock, lock, list records
-  (works while locked, since record shells stay readable — see
-  `vault/README.md`), create a new record with a JSON payload editor, view
-  (decrypt) or delete a selected record, and a **Files / Folders / Drives**
-  sub-tab for bulk-encrypting any combination of files, folders, or drives
-  (any size, chunked transparently).
-- **Biometrics** — create/unlock the local keyring, enroll an identity
-  against voice/fingerprint/video files (each with a file-picker), verify a
-  probe against a stored identity with an "any modality matches" checkbox,
-  inspect a non-secret summary, delete an identity, generate synthetic test
-  samples, and a **File Attachments** sub-tab for attaching/extracting
-  arbitrary files, folders, or drives on an identity.
-- **Packages** — choose/create a package file, create a package with an
-  initial recipient, add or remove recipients (each requiring an existing
-  recipient's master key to authorize), open a package as a recipient,
-  verify and display the custody chain, and run the same
-  create → add-recipient → open demo cycle as `packages/main.py demo`.
+Provides the shared busy dialog and background-operation runner used for slow
+operations. Worker code runs away from Tkinter's main thread, while all widget
+updates remain on the main thread.
 
-### A note on package master keys
+### `gui/widgets/dialogs.py`
 
-The Packages tab follows the same convention `packages/main.py`'s CLI does:
-a "master key text" field accepts any typed text and stretches it to a
-32-byte key via `hashlib.sha256`. That is a demo/test convenience, not a real
-key-management path — a production integration should supply an actual
-32-byte master key (for example, one unlocked from `crypto.keyring.Keyring`)
-rather than typed text. This is called out in the GUI's field labels and in
-the code comment on `PackagesTab._derive_master_key`.
+Contains reusable modal-dialog helpers shared by the three tabs.
 
-### What this does not add
+### `gui/widgets/path_panel.py`
 
-No new storage format, no new crypto, no new validation rules, and no new
-CLI-invisible behavior. Everything a button in this GUI does is something the
-corresponding CLI (`vault/app.py`, `biometrics/app.py`, `packages/main.py`)
-already does — this is only a second way to drive the same application
-layer, for anyone who would rather click through a window than remember
-subcommand syntax.
+Contains the shared file, folder, and drive selection panel used by bulk Vault
+operations and biometric attachments.
+
+### `gui/tabs/tab_vault.py`
+
+Contains the Vault interface, including record operations and the Files /
+Folders / Drives workflow.
+
+### `gui/tabs/tab_biometrics.py`
+
+Contains biometric enrollment, verification, inspection, deletion, sample
+generation, and attachment workflows.
+
+### `gui/tabs/tab_packages.py`
+
+Contains identity-bound package creation, recipient management, opening,
+verification, custody-chain display, and demo workflows.
+
+---
+
+## Architecture Rule
+
+No cryptography, validation, identity policy, or persistence implementation
+belongs in `app.py` or `gui/`. GUI controls call the same application and
+service layers used by the command-line tools:
+
+- `vault.store.vault_service`
+- `biometrics.engine.enrollment`
+- `biometrics.engine.verification`
+- `packages.package`
+
+The GUI is wiring and presentation, not a second implementation of the system.
+
+---
+
+## Slow Operations
+
+BSR2 key derivation and large encrypted-data operations can take noticeable
+time. Operations that would block the interface use the shared background
+runner in `gui/core/busy.py` and display a modal working indicator.
+
+Tkinter widgets are only read or changed on the main thread. Background workers
+return results through the shared runner, which schedules completion handling
+back onto Tkinter's event loop.
+
+---
+
+## File, Folder, and Drive Selection
+
+The shared `PathSelectionPanel` supports the GUI workflows that accept files,
+folders, or drive roots. Selection uses Tkinter's standard file and directory
+pickers. Native drag-and-drop support is not part of the 1.2.0 GUI layout.
+
+---
+
+## Dependency Policy
+
+The GUI uses only Python's standard library:
+
+- `tkinter`
+- `threading`
+- `queue`
+- `pathlib`
+
+It does not require a GUI framework, package manager install, cloud service, or
+network connection.
