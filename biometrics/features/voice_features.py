@@ -14,12 +14,12 @@ transparent, fully auditable, dependency-free feature set suitable for the
 threshold-based matching this project performs.
 """
 from biometrics.codecs import dsp, wave_tools
+from biometrics.features.similarity import distance_similarity
 
 FRAME_SIZE = 512
 HOP_SIZE = 256
 BAND_COUNT = 8
 DCT_COEFFICIENT_COUNT = 12
-
 # energy + zero-crossing-rate + band energies + DCT coefficients
 FEATURE_VECTOR_LENGTH = 1 + 1 + BAND_COUNT + DCT_COEFFICIENT_COUNT
 
@@ -37,12 +37,10 @@ def extract_from_samples(samples: list, sample_rate: int) -> list:
     frames = dsp.frame_signal(samples, FRAME_SIZE, HOP_SIZE)
     if not frames:
         raise VoiceFeatureError("no frames could be extracted from the recording.")
-
     energy_sum = 0.0
     zcr_sum = 0.0
     band_sums = [0.0] * BAND_COUNT
     dct_sums = [0.0] * DCT_COEFFICIENT_COUNT
-
     for frame in frames:
         windowed = dsp.apply_hamming_window(frame)
         energy_sum += dsp.short_time_energy(windowed)
@@ -53,7 +51,6 @@ def extract_from_samples(samples: list, sample_rate: int) -> list:
         dct = dsp.discrete_cosine_transform(bands, DCT_COEFFICIENT_COUNT)
         for index, value in enumerate(dct):
             dct_sums[index] += value
-
     frame_count = len(frames)
     vector = (
         [energy_sum / frame_count]
@@ -71,19 +68,18 @@ def extract_from_wav(path) -> list:
 
 
 def compare(vector_a: list, vector_b: list) -> float:
-    """Cosine similarity between two feature vectors, in ``[-1.0, 1.0]``.
+    """Distance-based similarity between two voice feature vectors, in
+    (0.0, 1.0].
 
-    Cosine similarity is used rather than Euclidean distance because it is
-    insensitive to the overall scale of the two vectors, only their
-    direction -- appropriate here since ``normalize_vector`` already removes
-    absolute scale but two recordings can still differ in relative loudness
-    per-band.
+    Previously used raw cosine similarity. ``dsp.normalize_vector``
+    already removes absolute scale (unit max-abs-value), but not the
+    underlying similarity-in-direction problem cosine has: confirmed
+    0.9762 between two different seeds, above the 0.85 default threshold
+    (see biometrics/features/similarity.py's module docstring for the
+    full verification). Switched to normalized Euclidean distance,
+    confirmed to push the same impostor pair down to 0.6213 while a
+    genuine self-match stays at 1.0000.
     """
     if len(vector_a) != len(vector_b):
         raise VoiceFeatureError("feature vectors must be the same length.")
-    dot_product = sum(a * b for a, b in zip(vector_a, vector_b))
-    magnitude_a = sum(a * a for a in vector_a) ** 0.5
-    magnitude_b = sum(b * b for b in vector_b) ** 0.5
-    if magnitude_a == 0 or magnitude_b == 0:
-        return 0.0
-    return dot_product / (magnitude_a * magnitude_b)
+    return distance_similarity(vector_a, vector_b)

@@ -3,6 +3,105 @@
 All notable changes to BrisartIdentityTools are recorded here.
 
 ---
+## [1.1.0] - 2026-08-25
+
+A biometric matching-accuracy release, combined with a test-suite reorganization
+and the final removal of ruff from the toolchain. No stored template format
+changed and no shipped module's runtime behavior changed except the biometrics
+similarity scoring described below.
+
+### Fixed
+
+- **All three biometric modalities (fingerprint, voice, video) used a
+  similarity metric that was blind to real impostors.** `compare()` in each of
+  `fingerprint_features.py`, `video_features.py`, and `voice_features.py` used
+  plain cosine similarity, which measures only the *angle* between two feature
+  vectors, never how far apart their actual values are. For all three of this
+  project's feature spaces (fingerprint ridge-orientation + magnitude values,
+  raw video pixel-brightness block-means, voice energy/band-DCT vectors), the
+  vectors are mostly positive and similarly shaped regardless of whose
+  biometric data they came from, so two completely different people's vectors
+  still pointed in a broadly similar direction. Cosine similarity reported
+  that as a near-perfect match.
+
+  Verified directly against real generated samples (the `ci-enroll` /
+  `ci-other` seeds the CLI smoke test uses), confirmed end-to-end through the
+  actual CLI:
+
+  | Modality | old cosine score (bug) | new score | threshold | result |
+  |---|---|---|---|---|
+  | fingerprint | 0.9974 | 0.6197 | 0.80 | correctly rejected |
+  | voice | 0.9762 | 0.6213 | 0.85 | correctly rejected |
+  | video | 0.9159 | 0.6162 | 0.75 | correctly rejected |
+
+  A genuine self-match scored 1.0000 before and after the fix in every case,
+  so real enrollments continue to verify correctly.
+
+  Mean-centering (a Pearson-correlation-style cosine variant) was tried first
+  and barely moved the impostor score: cosine similarity is fundamentally an
+  angle-only metric, and this project's impostor/genuine separation lives in
+  magnitude of difference, not angle, so no cosine variant was going to fix it.
+
+### Added
+
+- **`biometrics/features/similarity.py`** — a new shared module holding
+  `distance_similarity()`: a normalized-Euclidean-distance-based score in
+  `(0.0, 1.0]`, self-relative to each vector pair's own average magnitude and
+  mapped through exponential decay so identical vectors score exactly `1.0`.
+  All three feature modules now import this one function instead of each
+  defining their own `compare()` math.
+
+### Changed
+
+- **`fingerprint_features.py`, `video_features.py`, `voice_features.py`** —
+  each module's `compare()` is now a thin wrapper delegating to
+  `distance_similarity()`. Feature extraction itself is unchanged; only the
+  similarity/scoring step changed.
+- **Test suite reorganized under `tests/`.** `run_tests.py`,
+  `test_bsr2_vendor_integrity.py`, and `test_cli_dispatcher.py` moved from the
+  repository root into `tests/`, alongside every other tool's `tests/`
+  directory, for a more consistent layout. `run_tests.py`'s discovery logic
+  is unaffected since it walks the whole tree by dotted module name rather
+  than assuming a fixed location for these three files.
+
+### Removed
+
+- **ruff removed entirely.** `pyproject.toml` (which existed solely to
+  configure ruff) is deleted, the `lint:` job is removed from
+  `.github/workflows/tests.yml`, and the local `.ruff_cache/` is cleared.
+  This project remains pure Python with zero external dependencies end to
+  end, including in its dev/CI tooling.
+
+### Known issue (not fixed in this release)
+
+- **`tests/test_bsr2_vendor_integrity.py` still has a stale digest pin.**
+  `PINNED_DIGESTS` in its current, moved location still holds the
+  CRLF-normalized hash values (`89ccae49...`, `b50b01b7...`, `93b0f72d...`,
+  `d5ba6022...`), which do not match what the test's own `_sha256()`
+  (line-ending-normalizing) hashing produces against the actual `vendor/*.py`
+  files on disk. This means `test_vendored_files_match_their_pinned_digests`
+  will still fail if the suite is run as-is. This is a carry-over from
+  1.0.3.1 that was diagnosed but not yet corrected in the files that shipped
+  in this snapshot — flagging it explicitly rather than presenting the suite
+  as fully green. Fixing it requires either updating `PINNED_DIGESTS` to
+  match the test's own normalized output, or intentionally switching
+  `_sha256()` to raw (non-normalized) hashing and re-pinning to match --
+  a decision that was in progress but not finalized as of this release.
+
+### Notes
+
+- No enrolled template's stored bytes changed and no re-enrollment is
+  required; the biometrics fix applies at verification time against
+  templates exactly as they were already stored.
+- If you have any automation or tests that assert a specific non-1.0
+  similarity score for fingerprint/voice/video, those expected values will
+  need updating to reflect the new distance-based scoring.
+- The 1.0.3.1 security caveats are unchanged and still apply: BSR2 is
+  unreviewed research crypto, the package custody chain is tamper-evident
+  rather than a digital signature, and losing both a vault's passphrase and
+  recovery code is unrecoverable by design.
+
+---
 
 ## [1.0.3] - 2026-08-24
 

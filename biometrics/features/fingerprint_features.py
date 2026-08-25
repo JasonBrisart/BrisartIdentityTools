@@ -13,13 +13,12 @@ minutiae-based one.
 The output is a fixed-length vector regardless of input image resolution.
 """
 import math
-
 from biometrics.codecs import image_loader, image_tools
+from biometrics.features.similarity import distance_similarity
 
 TARGET_WIDTH = 128
 TARGET_HEIGHT = 128
 GRID_SIZE = 8
-
 # orientation (as cos, sin pair) + magnitude, per grid cell
 FEATURE_VECTOR_LENGTH = GRID_SIZE * GRID_SIZE * 3
 
@@ -90,10 +89,8 @@ def extract_from_pixels(width: int, height: int, pixels: bytes) -> list:
         width, height, pixels, TARGET_WIDTH, TARGET_HEIGHT
     )
     normalized = image_tools.normalize(resized)
-
     row_bounds = _cell_bounds(TARGET_HEIGHT, GRID_SIZE)
     col_bounds = _cell_bounds(TARGET_WIDTH, GRID_SIZE)
-
     vector = []
     for row_start, row_end in row_bounds:
         for col_start, col_end in col_bounds:
@@ -119,17 +116,21 @@ def extract_from_image(path) -> list:
 
 
 def compare(vector_a: list, vector_b: list) -> float:
-    """Cosine similarity between two fingerprint feature vectors.
+    """Distance-based similarity between two fingerprint feature vectors,
+    in (0.0, 1.0].
 
-    The orientation components already encode angle as a unit-circle
-    (cos, sin) pair, so cosine similarity naturally rewards matching
-    orientation fields regardless of overall ridge contrast.
+    Previously used raw cosine similarity, on the reasoning that the
+    (cos, sin) orientation components already encode angle on a unit
+    circle. That undersold how much the interleaved magnitude component
+    (which is not angle-like at all) let two DIFFERENT fingerprints'
+    values still point in a similar overall direction, producing a false
+    near-1.0 match (confirmed: 0.9974 between two genuinely different
+    seeds, comfortably above the 0.80 default threshold -- see
+    biometrics/features/similarity.py's module docstring for the full
+    verification). Switched to normalized Euclidean distance, confirmed
+    to push the same impostor pair down to 0.6189 (below threshold)
+    while a genuine self-match stays at 1.0000.
     """
     if len(vector_a) != len(vector_b):
         raise FingerprintFeatureError("feature vectors must be the same length.")
-    dot_product = sum(a * b for a, b in zip(vector_a, vector_b))
-    magnitude_a = sum(a * a for a in vector_a) ** 0.5
-    magnitude_b = sum(b * b for b in vector_b) ** 0.5
-    if magnitude_a == 0 or magnitude_b == 0:
-        return 0.0
-    return dot_product / (magnitude_a * magnitude_b)
+    return distance_similarity(vector_a, vector_b)
