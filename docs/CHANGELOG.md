@@ -4,6 +4,45 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.2.1] - 2026-08-25
+
+A patch release fixing a record-kind bug in the Vault's chunked bulk file/folder/drive
+encryption path. No stored vault, identity, keyring, biometric-template, attachment,
+package, or custody-chain format changed. There is no data migration.
+
+### Fixed
+
+- **`vault/store/bulk_file_service.py`**: chunk records created by
+  `BulkFileService.upsert_large_bytes()` (and therefore `upsert_paths()`) were
+  previously sealed under the same `"file"` kind used by a genuinely standalone
+  single-file record. This made an internal bundle chunk indistinguishable from a
+  real standalone file record created directly through
+  `VaultService.upsert_file`/`upsert_file_bytes`. Chunks are now sealed under the
+  already-defined `BUNDLE_CHUNK_KIND` (`"bundle-chunk"`) instead, so a chunk, a
+  bundle manifest, and a standalone file each carry a distinct, correct `kind`.
+- **`gui/tabs/tab_vault.py`**: the "Files / Folders / Drives" list no longer shows
+  internal bundle chunks as if each were its own independent encrypted file (only
+  standalone files and bundle manifests are listed). The "Decrypt / Restore
+  Selected..." button now checks the selected record's `kind` first: a standalone
+  `"file"`-kind record is decrypted directly to disk, while any other kind (a
+  bundle manifest) is restored via the existing zip-based `restore_paths()` flow.
+  Previously, selecting a genuine standalone file record here always triggered the
+  bundle-restore path, which assumes a JSON manifest, and failed with a confusing
+  "decrypted payload is not valid JSON" error instead of decrypting the file.
+- **`vault/store/vault_service.py`**: `upsert_file_bytes()`/`upsert_file()` now
+  accept an optional `kind` parameter (defaults to `"file"`, unchanged for existing
+  callers) so callers like `BulkFileService` can seal internal pieces under a
+  distinct kind without duplicating the sealing logic.
+
+### Added
+
+- **`vault/tests/test_bulk_file_service.py`**: three regression tests confirming
+  bundle chunks use `BUNDLE_CHUNK_KIND`, bundle manifests use
+  `BUNDLE_MANIFEST_KIND`, and a standalone file record's kind is never conflated
+  with either.
+
+---
+
 ## [1.2.0] - 2026-08-25
 
 A GUI architecture release that splits the former single-file desktop interface

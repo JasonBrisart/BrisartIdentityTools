@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from common.hashing import sha256_bytes
 from crypto.context import record_context
 from crypto.envelope import open_bytes, open_json, seal_bytes, seal_json
@@ -152,7 +153,7 @@ class VaultService:
         return summaries
 
     def upsert_file_bytes(self, label: str, file_bytes: bytes, original_filename: str = "",
-                          record_id: str = None) -> dict:
+                          record_id: str = None, kind: str = FILE_RECORD_KIND) -> dict:
         """Seal arbitrary raw bytes as a vault record, with NO assumption
         about what the bytes are: any extension, no extension, binary
         content that isn't valid text/JSON at all -- an executable, an
@@ -162,6 +163,19 @@ class VaultService:
         with crypto.envelope.seal_bytes (raw bytes in, raw bytes out) rather
         than seal_json, so nothing about the payload is ever parsed,
         decoded, or interpreted as JSON at any point in this round trip.
+
+        `kind` defaults to FILE_RECORD_KIND ("file") for a genuinely
+        standalone file, but callers that are storing an internal PIECE of
+        a larger construct -- e.g. BulkFileService's chunked bundle
+        chunks -- should pass a distinct kind (BUNDLE_CHUNK_KIND) so those
+        internal records can be told apart from a real standalone
+        single-file record later (see BUG FIX note in
+        vault.store.bulk_file_service.upsert_large_bytes: chunks and
+        standalone files used to be indistinguishable, which both cluttered
+        the "Files / Folders / Drives" GUI list with raw internal chunk
+        records and made the GUI's "Decrypt / Restore Selected" button
+        always assume every "file"-kind record was a JSON manifest bundle,
+        crashing on a genuinely standalone file).
 
         `original_filename` is stored in the clear as a normal, non-secret
         field on the record (vault record shells -- label, kind, timestamps
@@ -185,7 +199,7 @@ class VaultService:
                 record_id = new_record_id()
         else:
             validate_record_id(record_id)
-        context = record_context(record_id, FILE_RECORD_KIND, normalized_label)
+        context = record_context(record_id, kind, normalized_label)
         rng = new_generator("vault-upsert-file")
         envelope = seal_bytes(master_key, bytes(file_bytes), context, rng)
         existing = records.get(record_id)
@@ -194,14 +208,14 @@ class VaultService:
             record = replace_payload(existing, envelope, stamp_updated(existing["created_at"]))
             action = "updated"
         else:
-            record = new_record(record_id, normalized_label, FILE_RECORD_KIND, envelope, stamp_new_record())
+            record = new_record(record_id, normalized_label, kind, envelope, stamp_new_record())
             action = "created"
         record["original_filename"] = original_filename
         record["file_size_bytes"] = len(file_bytes)
         record["file_sha256"] = sha256_bytes(bytes(file_bytes))
         records[record_id] = record
         save_records(self.path, records)
-        self._audit(action, record_id, normalized_label, FILE_RECORD_KIND)
+        self._audit(action, record_id, normalized_label, kind)
         # public_summary() only returns the fields every vault record kind
         # shares (record_id/label/kind/timestamps); the file-specific
         # plaintext metadata is merged in here so a caller can immediately
@@ -213,7 +227,7 @@ class VaultService:
             "file_sha256": record["file_sha256"],
         }
 
-    def upsert_file(self, path, label: str = None, record_id: str = None) -> dict:
+    def upsert_file(self, path, label: str = None, record_id: str = None, kind: str = FILE_RECORD_KIND) -> dict:
         """Convenience wrapper around upsert_file_bytes(): reads a real file
         from disk (any name, any extension, or no extension at all -- the
         file's own name is never inspected to decide how to handle it) and
@@ -225,7 +239,7 @@ class VaultService:
             raise VaultServiceError(f"no file found at {resolved}.")
         file_bytes = resolved.read_bytes()
         return self.upsert_file_bytes(
-            label or resolved.name, file_bytes, original_filename=resolved.name, record_id=record_id,
+            label or resolved.name, file_bytes, original_filename=resolved.name, record_id=record_id, kind=kind,
         )
 
     def get_file_bytes(self, record_id: str) -> bytes:

@@ -34,10 +34,12 @@ BUNDLE_MANIFEST_KIND) naming how many chunk records exist, their ordered
 record ids, the original total size, and a SHA-256 of the COMPLETE
 reassembled plaintext (the zip bytes, before any chunking) -- so a restore
 can verify integrity across the whole chunk set, not just per-chunk. Each
-chunk itself is a completely ordinary vault FILE record (created via
-VaultService.upsert_file_bytes, the same function a single small file
-uses), so nothing about a chunk record's own storage format is special;
-only the manifest that ties them together is new.
+chunk itself is a vault FILE record (created via
+VaultService.upsert_file_bytes) sealed under kind BUNDLE_CHUNK_KIND (see
+BUG FIX note below) rather than the standalone FILE_RECORD_KIND ("file")
+kind, so nothing about a chunk record's own sealing/opening is special --
+only its "kind" field distinguishes it as an internal bundle piece rather
+than a real, independently-meaningful standalone file record.
 """
 import tempfile
 import time
@@ -81,7 +83,6 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
     for p in resolved_paths:
         if not p.exists():
             raise BulkFileServiceError(f"path does not exist: {p}")
-
     file_count = 0
     skipped = []
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -149,9 +150,26 @@ class BulkFileService:
         chunk_summaries = []
         chunk_index = 0
         for chunk in _iter_chunks(data, self.chunk_bytes) if data else [b""]:
+            # BUG FIX (2026-08-25): chunk records were previously created
+            # with VaultService.upsert_file_bytes's DEFAULT kind
+            # ("file" / FILE_RECORD_KIND), which is the exact same kind a
+            # genuinely standalone single-file record uses (e.g. one
+            # created via `vault.app encrypt-file`, or a small bundle whose
+            # content fits in a single chunk). That made a bundle's
+            # internal chunk records indistinguishable from real
+            # standalone files: they cluttered the GUI's "Files / Folders
+            # / Drives" list as if each chunk were its own file, AND the
+            # GUI's "Decrypt / Restore Selected" button always assumed
+            # every selected "file"-kind record was a JSON bundle
+            # manifest, so selecting a genuine standalone file record (or
+            # an internal chunk, if a user found one) crashed instead of
+            # decrypting it directly. Chunks are now sealed under the
+            # distinct BUNDLE_CHUNK_KIND so they can be told apart from
+            # both standalone files and the manifest itself.
             chunk_summary = self.vault_service.upsert_file_bytes(
                 f"{label} (part {chunk_index})", chunk,
                 original_filename=f"{original_filename}.part{chunk_index}",
+                kind=BUNDLE_CHUNK_KIND,
             )
             chunk_summaries.append(chunk_summary)
             chunk_index += 1
