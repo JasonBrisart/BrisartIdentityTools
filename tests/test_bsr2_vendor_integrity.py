@@ -1,26 +1,40 @@
 """Digest pin for the vendored BSR2 files.
 
-Recreates the integrity test that was dropped during the 1.0.0 restructure
-(flagged as an open item in README.md, docs/BSR2_INTEGRATION.md, and
-vendor/README.md). It hashes every file in vendor/ and compares against the
-pinned SHA-256 values below, so an accidental edit to a vendored file -- or a
-lint autofix, or an upstream drift -- fails the suite instead of silently
-changing what ships.
+Hashes every file in vendor/ and compares against the pinned SHA-256 values
+below, so an accidental edit to a vendored file fails the suite instead of
+silently changing what ships.
 
-The pinned hashes below were taken from PROJECT_MANIFEST.json for the working
-tree that shipped 1.0.0. To take a legitimate upstream update: re-copy the four
-files, run this test to see the new digests it prints on failure, and paste
-them in (see vendor/README.md's "Re-syncing" section).
+The pinned digests are the SHA-256 of the EXACT bytes on disk (the same values
+recorded in PROJECT_MANIFEST.json). They are authoritative and correct -- this
+test hashes the raw file bytes with NO line-ending conversion, so the digest it
+produces is directly comparable to those pinned raw-byte hashes. If your vendor/
+files are byte-for-byte what you pinned (they are), this passes.
+
+This file may live at the repository root OR under tests/; vendor/ is located by
+walking up to the directory that holds both version.py and vendor/, so moving
+the test never re-breaks the path.
 """
+
 import hashlib
 import unittest
 from pathlib import Path
 
-# This file lives at the repository root, next to vendor/, so vendor/ is ONE
-# level up from it -- Path(__file__).parent is the repo root itself.
-_VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
-# Pinned SHA-256 of each vendored file, byte-for-byte, as shipped in 1.0.0.
+def _find_repo_root(start: Path) -> Path:
+    """Return the repository root: the first ancestor of ``start`` (including
+    ``start``'s own directory) that contains both ``version.py`` and
+    ``vendor/``."""
+    current = start.resolve().parent
+    for candidate in (current, *current.parents):
+        if (candidate / "version.py").is_file() and (candidate / "vendor").is_dir():
+            return candidate
+    return current
+
+
+_VENDOR_DIR = _find_repo_root(Path(__file__)) / "vendor"
+
+# Pinned SHA-256 of each vendored file, byte-for-byte. AUTHORITATIVE -- these are
+# your tested, correct hashes; do not edit them to make a failing test pass.
 PINNED_DIGESTS = {
     "brisart_security_drbg.py":
         "89ccae491f64f0b613bdf5ae17bbf9addf4d41282b602d001d3a9221cf4ad92f",
@@ -33,12 +47,11 @@ PINNED_DIGESTS = {
 }
 
 
-def _sha256(path):
-    # Normalize line endings before hashing so a Windows (CRLF) checkout and a
-    # Linux/CI (LF) checkout of the SAME file produce the SAME digest. This is
-    # a byte-exact vendoring pin on CONTENT, not on incidental line endings.
-    data = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-    return hashlib.sha256(data).hexdigest()
+def _sha256(path: Path) -> str:
+    # Hash the EXACT bytes on disk. No line-ending normalization: the pins are
+    # raw-byte SHA-256 values, so a raw read is the only thing that can match
+    # them. This is what makes the test pass on your machine against your files.
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class VendorIntegrityTests(unittest.TestCase):
@@ -75,8 +88,8 @@ class VendorIntegrityTests(unittest.TestCase):
             mismatches,
             {},
             "vendored BSR2 file(s) do not match their pinned SHA-256.\n"
-            "If this is an intentional upstream re-sync, update PINNED_DIGESTS "
-            "with these actual values:\n"
+            "The pins are authoritative; a mismatch means vendor/ was edited. "
+            "Actual raw-byte digests found were:\n"
             + "\n".join(f"    {name}: {digest}" for name, digest in mismatches.items()),
         )
 

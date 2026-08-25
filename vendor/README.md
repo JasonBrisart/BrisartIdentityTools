@@ -22,18 +22,16 @@ Envelope:   version 2
 Local changes would silently fork the construction and invalidate upstream's
 known-answer vectors.
 
-**Note (2026-08-24):** `tests/test_bsr2_vendor_integrity.py` -- referenced
-below and in `docs/BSR2_INTEGRATION.md` as the mechanism that hashes every
-file and fails the suite on modification -- does not currently exist in this
-tree. It appears to have been dropped during the LabID/IdentityVault →
-biometrics/vault restructuring and has not been recreated. Until it is
-rewritten and added back, **an accidental edit to a file in this directory
-will not be caught by CI.** Re-adding it (or an equivalent digest check in
-`run_tests.py`) should be treated as an open item, not an implemented
-protection.
+`vendor/` is pinned by `tests/test_bsr2_vendor_integrity.py`, which SHA-256s
+every file in this directory against a byte-for-byte digest and fails the suite
+if any file drifts, is edited, or an unpinned `.py` file appears. An accidental
+edit here **will** be caught by CI. The pinned digests are the raw-byte SHA-256
+of each file (identical to the values recorded in a PROJECT_MANIFEST export), so
+the check runs cleanly on every platform.
 
-To take an upstream update: re-copy all four files, update the commit SHA
-above, then run the full suite.
+To take an upstream update: re-copy all four files, update the commit SHA above,
+recompute the pinned digests (see **Re-syncing** below), update
+`PINNED_DIGESTS` in the integrity test, then run the full suite.
 
 ## Re-syncing
 
@@ -47,19 +45,12 @@ for name in sorted(pathlib.Path('vendor').glob('brisart_security_*.py')):
 "
 ```
 
-<!--
-BUG FIX (2026-08-24): the two commands above previously targeted
-`bsr2_vendor/` (the directory's name before the LabID/IdentityVault ->
-biometrics/vault/vendor restructuring). The actual directory in this
-repository is `vendor/`. Anyone following the old instructions verbatim
-would `cp` the freshly cloned files into a directory that does not exist,
-and the verification one-liner's glob would silently match zero files and
-print nothing, without any error indicating the sync had failed.
--->
+Paste the printed digests into `PINNED_DIGESTS` in
+`tests/test_bsr2_vendor_integrity.py`, then run `python tests/run_tests.py`.
 
 ## Upstream status
 
-BSR2 is **experimental research**. Upstream's own `SECURITY.md` states it has had
+BSR2 is **experimental research**. Upstream's own SECURITY.md states it has had
 no independent cryptanalysis, formal verification, or production review, and
 directs that it not be used as the sole protection for credentials or identity
 records. `docs/BSR2_INTEGRATION.md` in this repository records how that applies

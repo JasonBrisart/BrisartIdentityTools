@@ -33,11 +33,11 @@ Encryption is [BSR2](https://github.com/JasonBrisart/BrisartSecurityResearch),
 vendored byte-identical in `vendor/` at the repository root. No cryptographic
 primitive is implemented here.
 
-> **Note:** the digest-pin test that used to verify `vendor/` is byte-identical
-> to upstream (`tests/test_bsr2_vendor_integrity.py`) was dropped during the
-> 1.0.0 restructure and has not yet been recreated. Until it is, an accidental
-> edit to `vendor/` will not be caught by CI. See `vendor/README.md` and
-> `docs/BSR2_INTEGRATION.md`.
+`vendor/` is pinned by `tests/test_bsr2_vendor_integrity.py`, which SHA-256s
+every vendored file against a byte-for-byte digest and fails the suite if any
+file drifts, is edited, or an unpinned `.py` file appears — so an accidental
+edit to `vendor/` is caught by CI. See `vendor/README.md` and
+`docs/BSR2_INTEGRATION.md`.
 
 A vault holds a **keyring**: a random 32-byte master key, sealed once under a
 passphrase-derived key and once under an offline recovery code. Record payloads
@@ -187,7 +187,9 @@ printf 'my-passphrase\n' | python -m vault.app --vault data/vaults/main_vault.js
 Piped input lands in shell history and process listings just like an
 environment variable would; prefer the interactive prompt for anything real.
 
-### Repository Layout
+---
+
+## Repository Layout
 
 ```text
 vault/
@@ -209,12 +211,14 @@ vault/
 └── README.md
 ```
 
+---
+
 ## Status
 
-Part of the 1.0.0 production/stable release. Stored formats are stable; vaults
+Part of the production/stable release line. Stored formats are stable; vaults
 written by earlier betas load unchanged.
 
-BSR2 itself is unreviewed research cryptography. Upstream's `SECURITY.md` states
+BSR2 itself is unreviewed research cryptography. Upstream's SECURITY.md states
 it should not be used as the sole protection for credentials, identity records,
 or recovery secrets, and that caveat is inherited here rather than softened. The
 full threat model, including what this encryption does not protect against, is

@@ -3,26 +3,43 @@
 
 The repository is one flat PEP 420 namespace-package tree with no __init__.py
 files. unittest's discover(start_dir=...) cannot import a namespace sub-package
-as a start directory (it raises "Start directory is not importable"), so this
-runner instead finds every test_*.py file on disk, converts each path to its
-dotted module name, and loads it by name. Loading by dotted name works for
-namespace packages as long as the repository root is on sys.path (added below).
+as a start directory, so this runner instead finds every test_*.py file on disk,
+converts each path to its dotted module name, and loads it by name. Loading by
+dotted name works for namespace packages as long as the repository root is on
+sys.path (added below).
+
+This file may live at the repository root OR under tests/; the repository root
+is located by walking up to the directory that holds both version.py and
+vendor/, so relocating the runner never breaks discovery or sys.path.
 
 A handful of tests exercise BSR2's real, deliberately-slow password KDF
-(~1 minute per derivation on CI hardware), grouped by class in
-SLOW_TEST_CLASSES so they can be run separately:
+(~1 minute per derivation), grouped by class in SLOW_TEST_CLASSES so they can be
+run separately:
 
-    python run_tests.py            run every test
-    python run_tests.py --fast     everything EXCEPT the slow real-KDF tests
-    python run_tests.py --slow     ONLY the slow real-KDF tests
-    python run_tests.py --fast -v  verbose
+    python tests/run_tests.py            run every test
+    python tests/run_tests.py --fast     everything EXCEPT the slow real-KDF tests
+    python tests/run_tests.py --slow     ONLY the slow real-KDF tests
+    python tests/run_tests.py --fast -v  verbose
 """
+
 import argparse
 import sys
 import unittest
 from pathlib import Path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parent
+
+def _find_repo_root(start: Path) -> Path:
+    """Return the repository root: the first ancestor of ``start`` (including
+    ``start``'s own directory) that contains both ``version.py`` and
+    ``vendor/``."""
+    current = start.resolve().parent
+    for candidate in (current, *current.parents):
+        if (candidate / "version.py").is_file() and (candidate / "vendor").is_dir():
+            return candidate
+    return current
+
+
+REPOSITORY_ROOT = _find_repo_root(Path(__file__))
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
@@ -74,15 +91,12 @@ def build_suite(mode):
     collected = unittest.TestSuite()
     for module_name in _discover_module_names():
         collected.addTests(loader.loadTestsFromName(module_name))
-
     if loader.errors:
         for message in loader.errors:
             print(message, file=sys.stderr)
         raise SystemExit("test collection failed; see the import errors above.")
-
     if mode == "all":
         return collected
-
     filtered = unittest.TestSuite()
     for test in _iter_tests(collected):
         is_slow = _class_id(test) in SLOW_TEST_CLASSES
@@ -98,11 +112,9 @@ def main():
     selection.add_argument("--slow", action="store_true", help="run ONLY the slow real-KDF tests.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
-
     mode = "fast" if args.fast else "slow" if args.slow else "all"
     suite = build_suite(mode)
     result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)
-
     print(f"\n=== summary ({mode}) ===")
     print(f"{'PASS' if result.wasSuccessful() else 'FAIL'}  ran {result.testsRun} test(s)")
     return 0 if result.wasSuccessful() else 1

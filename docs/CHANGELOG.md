@@ -3,6 +3,62 @@
 All notable changes to BrisartIdentityTools are recorded here.
 
 ---
+
+## [1.1.1] - 2026-08-25
+
+A patch fixing the digest-pin defect that shipped as a documented **Known
+issue** in 1.1.0, plus the CI path and documentation that referred to the
+pre-`tests/` layout. No shipped module's behavior changed, no stored format
+changed, and there is nothing to migrate. With this release the full suite
+(308 fast tests) passes clean.
+
+### Fixed
+
+- **`tests/test_bsr2_vendor_integrity.py` digest pin (the 1.1.0 Known issue) is
+  resolved.** The test's `_sha256()` normalized line endings (`\r\n → \n`)
+  before hashing, so on a Windows (CRLF) checkout the digest it produced could
+  never match the authoritative **raw-byte** pins in `PINNED_DIGESTS`
+  (`89ccae49…`, `b50b01b7…`, `93b0f72d…`, `d5ba6022…`), and
+  `test_vendored_files_match_their_pinned_digests` failed even though `vendor/`
+  was byte-for-byte correct. `_sha256()` now hashes the exact bytes on disk with
+  **no** line-ending conversion, so it compares directly against the raw-byte
+  pins. As stated in 1.1.0, the pins themselves were always correct — they are
+  unchanged; only the test's hashing was wrong.
+- **`run_tests.py` and `test_bsr2_vendor_integrity.py` now resolve the
+  repository root robustly.** Both locate the root by walking up to the
+  directory that contains both `version.py` and `vendor/`, rather than assuming
+  a fixed depth. This keeps discovery, `sys.path`, and the `vendor/` lookup
+  correct now that all three root-level test files live under `tests/`, and
+  removes the fixed-path fragility that caused the 1.0.3 "vendored BSR2
+  directory is missing" class of error.
+- **CI workflow invoked the runner at its old path.** `.github/workflows/tests.yml`
+  called `python run_tests.py` in the `fast` and `slow` jobs, but the runner
+  moved to `tests/` in 1.1.0, so both jobs would fail at the first step. Both now
+  call `python tests/run_tests.py`. The `smoke` job is unchanged.
+
+### Changed
+
+- **Documentation corrected to match the enforced pin.** `README.md`,
+  `docs/BSR2_INTEGRATION.md`, and `vendor/README.md` still carried notes from
+  the 1.0.0 window stating the vendor digest test had been "dropped" or "does
+  not currently exist." Those notes are replaced with an accurate description:
+  `vendor/` is pinned by `tests/test_bsr2_vendor_integrity.py`, which SHA-256s
+  every vendored file against a byte-for-byte digest and fails CI on any drift,
+  edit, or unpinned `.py` file. The README's test-command examples now point at
+  `python tests/run_tests.py`.
+
+### Notes
+
+- The 1.1.0 biometric similarity fix, the `tests/` reorganization, and the
+  removal of ruff are all unchanged and remain in effect; this release only
+  closes the pin defect and aligns CI and docs with the shipped layout.
+- The security caveats are unchanged and still apply: BSR2 is unreviewed
+  research crypto, the package custody chain is tamper-evident rather than a
+  digital signature, and losing both a vault's passphrase and recovery code is
+  unrecoverable by design.
+
+---
+
 ## [1.1.0] - 2026-08-25
 
 A biometric matching-accuracy release, combined with a test-suite reorganization

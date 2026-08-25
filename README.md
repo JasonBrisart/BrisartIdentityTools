@@ -96,11 +96,13 @@ cd BrisartIdentityTools
 ```
 
 The repository is one flat tree with fully-qualified imports throughout, so one
-runner drives every suite:
+runner drives every suite. The suite lives under `tests/`:
 
 ```bash
-python run_tests.py          # full suite across biometrics, vault, and packages
-python run_tests.py -v       # verbose
+python tests/run_tests.py          # full suite across biometrics, vault, and packages
+python tests/run_tests.py -v       # verbose
+python tests/run_tests.py --fast   # everything except the slow real-KDF tests
+python tests/run_tests.py --slow   # only the slow real-KDF tests
 ```
 
 ### Unified CLI and desktop GUI
@@ -132,14 +134,17 @@ python app.py enroll jason-1 --label "Jason" \
   --voice data/samples/ci-enroll_voice.wav \
   --fingerprint data/samples/ci-enroll_fingerprint.pgm \
   --video data/samples/ci-enroll_video.brvid
+
 python app.py verify jason-1 \
   --voice data/samples/ci-enroll_voice.wav \
   --fingerprint data/samples/ci-enroll_fingerprint.pgm \
   --video data/samples/ci-enroll_video.brvid           # MATCH
+
 python app.py verify jason-1 \
   --voice data/samples/ci-other_voice.wav \
   --fingerprint data/samples/ci-other_fingerprint.pgm \
   --video data/samples/ci-other_video.brvid             # NO MATCH
+
 python app.py list
 python app.py inspect jason-1
 ```
@@ -147,6 +152,10 @@ python app.py inspect jason-1
 Re-enrolling an existing identity is refused outright. There is no
 `--overwrite` flag; delete the identity first with `python app.py delete jason-1`,
 then enroll again, if you need to replace its stored template.
+
+On first run in a fresh data directory, enroll/verify create a local
+keyring and prompt you to set a passphrase, printing a one-time recovery code
+to stderr.
 
 ### Vault: store and read local records
 
@@ -194,8 +203,6 @@ Creating a package requires every recipient's identity to be **unlocked**,
 which is a consequence of symmetric-only crypto rather than an oversight; see
 `packages/package.py`.
 
----
-
 ## Security Model
 
 These tools provide identity-based authorization, integrity checking, custody
@@ -210,12 +217,9 @@ vendored unmodified in `vendor/`. No cryptographic primitive is implemented in
 this repository, and there are still zero third-party dependencies: BSR2 is
 standard library only, as is everything here.
 
-> **Note:** the digest-pin test that verified `vendor/` was byte-identical to
-> upstream (`tests/test_bsr2_vendor_integrity.py`) was dropped during the 1.0.0
-> restructure and has not yet been recreated. Until it (or an equivalent digest
-> check) is re-added, an accidental edit to `vendor/` will not be caught by CI.
-> Re-adding it is an open item — see `docs/BSR2_INTEGRATION.md` and
-> `vendor/README.md`.
+`vendor/` is pinned by `tests/test_bsr2_vendor_integrity.py`, which SHA-256s
+every vendored file against a byte-for-byte digest and fails CI if any file
+drifts, is edited, or an unpinned `.py` file appears.
 
 What is encrypted at rest:
 
@@ -273,7 +277,7 @@ Stated plainly rather than left implied:
 - **Biometric matching is threshold-based on hand-rolled DSP features**, not a
   trained model, and there is no liveness / anti-spoofing gate.
 
-Upstream BSR2's own `SECURITY.md` states it is research software and should not
+Upstream BSR2's own SECURITY.md states it is research software and should not
 be used as the sole protection for credentials, identity records, or recovery
 secrets. That caveat applies here too. Full threat model:
 [docs/BSR2_INTEGRATION.md](docs/BSR2_INTEGRATION.md).
@@ -284,24 +288,18 @@ secrets. That caveat applies here too. Full threat model:
 are gitignored. A device key decrypts every template in its directory, so it
 must never be committed.
 
----
-
 ## Repository Status
 
-Active research project, at its first production/stable release (1.0.0).
+Active research project, at a production/stable release line
 
 "Production/stable" describes the code's own maturity — stable formats, a full
 test suite, and no data migration between releases — not an assurance about the
 underlying research cryptography, which remains unreviewed (see the Security
 Model above). Features may still change as new research directions emerge.
 
----
-
 ## License
 
 See LICENSE file for repository licensing information.
-
----
 
 ## Brisart Ecosystem
 

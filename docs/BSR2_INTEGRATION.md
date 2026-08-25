@@ -24,19 +24,19 @@ zero-dependency rule is absolute, the vendored files are standard-library only
 so vendoring costs nothing, and pinning the exact bytes means an upstream change
 cannot silently alter what this repository ships.
 
-The files are intended to be byte-identical to a pinned upstream commit and
-verified by a dedicated digest test. **Note:** at the time of this audit, no
-such integrity test (`test_bsr2_vendor_integrity.py` or equivalent) exists
-anywhere in the current tree — it appears to have been dropped during the
-recent restructuring and should be re-added before relying on this claim.
+The files are byte-identical to a pinned upstream commit and verified by
+`tests/test_bsr2_vendor_integrity.py`, which SHA-256s every file in `vendor/`
+against a pinned digest and fails the suite if any file drifts, is edited, or an
+unpinned `.py` file appears. The pins are the raw-byte SHA-256 of each file, so
+the check runs cleanly on every platform (see `.github/workflows/tests.yml`).
 
 They use flat imports of each other exactly as upstream does; rather than edit
-them into package-relative imports (which would fork the code and break any
-future digest pin), `crypto/vendor.py` puts `vendor/` on `sys.path` once and
+them into package-relative imports (which would fork the code and break the
+digest pin), `crypto/vendor.py` puts `vendor/` on `sys.path` once and
 re-exports. One place to audit instead of scattered path edits.
 
-`vendor/` should be excluded from lint, so a lint autofix cannot break a
-future digest pin.
+`vendor/` should be excluded from any autoformatter, so a formatting autofix
+cannot break the digest pin.
 
 ## Upstream's own caveat
 
