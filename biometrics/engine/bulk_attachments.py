@@ -57,7 +57,6 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
     for p in resolved_paths:
         if not p.exists():
             raise BulkAttachmentError(f"path does not exist: {p}")
-
     file_count = 0
     skipped = []
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
@@ -69,6 +68,12 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
                 except OSError as exc:
                     skipped.append({"path": str(root_path), "reason": str(exc)})
                 continue
+            # Folder (or drive root, which is just a folder with no parent
+            # and no files directly explainable as a single "file" case
+            # above): walk every file underneath it, preserving the
+            # relative structure under a top-level folder named after the
+            # root itself, so restoring multiple selected folders together
+            # never collides their contents into one flat namespace.
             base_name = root_path.name or root_path.drive.rstrip(":\\/") or "root"
             for candidate in root_path.rglob("*"):
                 if not candidate.is_file():
@@ -128,8 +133,16 @@ def restore_large_bytes(record: dict, name: str, master_key: bytes) -> bytes:
         raise BulkAttachmentError(f"manifest for {name!r} is missing required fields.")
     if len(manifest["chunk_names"]) != manifest["chunk_count"]:
         raise BulkAttachmentError("manifest chunk count does not match its chunk name list.")
-    pieces = [extract_attachment_bytes(record, chunk_name, master_key)
-             for chunk_name in manifest["chunk_names"]]
+    # BUG FIX (2026-08-24): a missing/deleted chunk previously let
+    # AttachmentError escape uncaught from extract_attachment_bytes here,
+    # instead of the BulkAttachmentError this module's own restore/attach
+    # calls otherwise raise for every other failure mode. Wrapped so a
+    # missing chunk is reported consistently with the rest of this module.
+    try:
+        pieces = [extract_attachment_bytes(record, chunk_name, master_key)
+                 for chunk_name in manifest["chunk_names"]]
+    except AttachmentError as exc:
+        raise BulkAttachmentError(f"a chunk is missing or unreadable: {exc}") from exc
     reassembled = b"".join(pieces)
     if len(reassembled) != manifest["total_size_bytes"]:
         raise BulkAttachmentError(
@@ -195,6 +208,10 @@ def remove_bulk_attachment(record: dict, name: str, master_key: bytes) -> dict:
         for chunk_name in manifest.get("chunk_names", []):
             record = remove_identity_attachment(record, chunk_name)
     except (AttachmentError, UnicodeDecodeError, json.JSONDecodeError):
+        # Manifest could not be decrypted or parsed (wrong key, or it was
+        # already removed) -- chunk names can't be identified in that
+        # case, but the manifest attachment itself is still cleaned up
+        # below instead of leaving the caller with no way to remove a
+        # bundle whose manifest has become unreadable.
         pass
-    record = remove_identity_attachment(record, f"{name}{_MANIFEST_SUFFIX}")
-    return record
+    return remove_identity_attachment(record, f"{name}{_MANIFEST_SUFFIX}")
