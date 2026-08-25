@@ -4,6 +4,41 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.2.2] - 2026-08-25
+
+A patch release fixing a metadata-loss bug in the Vault's record summary
+path. No stored vault, identity, keyring, biometric-template, attachment,
+package, or custody-chain format changed. There is no data migration.
+
+### Fixed
+
+- **`vault/records/record_model.py`**: `public_summary()` previously returned
+  only the five fields every record kind shares (`record_id`/`label`/`kind`/
+  `created_at`/`updated_at`), silently dropping a file record's plaintext
+  `original_filename`, `file_size_bytes`, and `file_sha256` fields (set
+  directly on the record by `VaultService.upsert_file_bytes()`). Because
+  `upsert_file_bytes()` manually re-merged those fields onto its own return
+  value, a file's size appeared correctly immediately after encryption — but
+  `VaultService.list_records()` and `get_summary()` call `public_summary()`
+  directly with no such merge, so the GUI's "Files / Folders / Drives" tab
+  silently blanked its Size column back to empty on every refresh, even
+  though the size was sitting in the clear on disk the whole time.
+  `public_summary()` now includes `original_filename`/`file_size_bytes`/
+  `file_sha256` whenever present on the record, and omits them otherwise, so
+  ordinary `"note"`/`"credential"` records and `"bundle-manifest"` records
+  (whose size is sealed inside an encrypted payload) are summarized exactly
+  as before.
+
+### Added
+
+- **`vault/tests/test_public_summary_file_metadata.py`**: four regression
+  tests confirming a file record's size/filename/hash survive a fresh
+  `list_records()` call (the actual bug), that `get_summary()` also carries
+  them, that ordinary JSON records never gain these keys, and that updating
+  a file record keeps its metadata current.
+
+---
+
 ## [1.2.1] - 2026-08-25
 
 A patch release fixing a record-kind bug in the Vault's chunked bulk file/folder/drive
