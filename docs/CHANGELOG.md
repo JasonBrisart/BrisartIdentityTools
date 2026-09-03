@@ -4,6 +4,31 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.0] - 2026-09-03
+
+Re-introduces a video-modality liveness/anti-spoofing GATE, closing the gap
+explicitly documented since 1.0.0 in `biometrics/README.md`'s Status section
+and `docs/BSR2_INTEGRATION.md`'s Residual Risks item 7 ("there is currently
+no liveness or anti-spoofing check for any modality"). This is a new
+implementation built against the current BRVID video pipeline, not a
+resurrection of the 0.6.0-beta AVI-based liveness code removed in the 1.0.0
+restructure. No stored template format changed; existing enrolled video
+templates verify unchanged.
+
+### Added
+- **`biometrics/features/liveness.py`**: new module. `assess_liveness()` measures mean absolute per-pixel frame-to-frame difference across a decoded BRVID clip and reports `is_live` against `DEFAULT_LIVENESS_THRESHOLD` (0.75). A clip built from a single repeated frame, or any clip with genuinely zero motion, scores exactly `0.0` and always fails the gate. **This is a motion-presence check, not general anti-spoofing** — it does not detect a played-back video recording, a physically-wobbled photograph, or a high-quality mask/deepfake with natural micro-motion; see the module's own docstring for the full scope statement.
+- **`biometrics/engine/enrollment.py`**: `enroll_modality()`/`enroll_identity()` gained an `allow_static: bool = False` parameter. For the `video` modality only, a static clip is refused at enrollment time by default — mirroring the 0.6.0-beta design ("a photograph cannot be baked into a template and make the verification-time gate meaningless"), re-implemented against the current codebase.
+- **`biometrics/engine/verification.py`**: `verify_modality()`/`verify_identity()` gained the same `allow_static` parameter. For the `video` modality only, a static probe is reported as a non-match with a populated `"liveness"` field **before** its similarity score is ever computed, rather than being scored against the stored template. Every other modality's result dict is unaffected and never gains a `"liveness"` key.
+- **`biometrics/app.py`**: `enroll` and `verify` both gained a `--allow-static` flag, threaded through to the functions above. `verify`'s console output now prints `LIVENESS_FAILED` (with the measured motion energy and threshold) instead of a similarity score when the gate rejects a video probe.
+- **`biometrics/tests/test_liveness.py`**: new regression tests covering zero-motion detection, the enrollment-time refusal and its override, the verification-time non-match-before-scoring behavior, and that non-video modalities are entirely unaffected.
+
+### Notes
+- Backward compatible: no change to any stored record's schema, and no change to any existing CLI flag's meaning. `--allow-static` is new and optional; omitting it preserves the exact enrollment/verification flow for every non-video modality.
+- **The default threshold is calibrated only against this project's own synthetic sample generator, not a real camera.** Real-world tuning against actual video captures is unfinished and open-ended — this release delivers the mechanism (a working, tested gate with a documented override), not a validated production threshold.
+- No new external dependencies were introduced.
+
+---
+
 ## [1.2.3] - 2026-09-03
 
 A patch release fixing a silent data-loss bug shared by the Vault and

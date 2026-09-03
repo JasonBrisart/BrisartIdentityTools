@@ -1,5 +1,5 @@
 """Biometrics command-line interface: enroll, verify, inspect, and manage
-identities, plus (new) attach/extract arbitrary files -- including whole
+identities, plus attach/extract arbitrary files -- including whole
 folders and drives, chunked past BSR2's single-envelope size limit -- on
 an identity, independent of the voice/fingerprint/video modality system.
 
@@ -10,6 +10,14 @@ and ``engine.verification``, persists identity records via
 ``identity.identity_store.IdentityStore``, and writes audit reports via
 ``reports.report_writer``. Individual modules stay unit-testable on their
 own; this file is where a human actually drives them from a terminal.
+
+LIVENESS GATE: --allow-static (on both `enroll` and `verify`) bypasses the
+video-modality liveness gate added in biometrics.features.liveness. Without
+it, enrolling or verifying a --video source that shows no genuine
+frame-to-frame motion (a static photograph, or a hand-built all-identical-
+frame clip) is refused/reported as a non-match. See
+biometrics/features/liveness.py's module docstring for exactly what this
+gate does and does not detect.
 
 Invoked either directly (``python biometrics/app.py ...``) or through the
 unified dispatcher (``python cli.py biometrics ...``, which sets ``sys.argv``
@@ -134,9 +142,13 @@ def command_enroll(args) -> int:
         raise AppError(
             "at least one of --voice, --fingerprint, or --video is required."
         )
-    record = enrollment.enroll_identity(
-        args.identity_id, args.label, master_key, modality_sources
-    )
+    try:
+        record = enrollment.enroll_identity(
+            args.identity_id, args.label, master_key, modality_sources,
+            allow_static=args.allow_static,
+        )
+    except enrollment.EnrollmentError as exc:
+        raise AppError(str(exc)) from exc
     store.save(record)
     report = report_writer.build_enrollment_report(
         args.identity_id, args.label, list(modality_sources.keys())
@@ -168,13 +180,22 @@ def command_verify(args) -> int:
         )
     try:
         result = verification.verify_identity(
-            record, probe_sources, master_key, require_all=not args.any_match
+            record, probe_sources, master_key, require_all=not args.any_match,
+            allow_static=args.allow_static,
         )
     except verification.VerificationError as exc:
         raise AppError(str(exc)) from exc
     report = report_writer.build_verification_report(result)
     report_writer.write_report(settings.REPORT_DIR, report)
     for modality_result in result["results"]:
+        if modality_result.get("liveness") is not None and not modality_result["liveness"]["is_live"]:
+            liveness = modality_result["liveness"]
+            print(
+                f"{modality_result['modality']}: LIVENESS_FAILED "
+                f"(motion_energy={liveness['motion_energy']:.4f}, "
+                f"threshold={liveness['threshold']:.4f})"
+            )
+            continue
         outcome = "MATCH" if modality_result["matched"] else "NO MATCH"
         print(
             f"{modality_result['modality']}: score={modality_result['score']:.4f} "
@@ -296,9 +317,9 @@ def command_attach_paths(args) -> int:
 
 
 def command_extract_attachment(args) -> int:
-    """Decrypt a previously attached file straight back to disk,
-    byte-for-byte identical to what was originally attached. Automatically
-    detects and reassembles a chunked bundle if one exists under this name."""
+    """Decrypt a previously attached file straight back to disk, byte-for-
+    byte identical to what was originally attached. Automatically detects
+    and reassembles a chunked bundle if one exists under this name."""
     keyring = _load_or_create_keyring()
     master_key = _unlock_keyring(keyring)
     store = _store()
@@ -403,6 +424,10 @@ def build_parser() -> argparse.ArgumentParser:
     enroll.add_argument("--voice", default=None, help="path to a WAV file.")
     enroll.add_argument("--fingerprint", default=None, help="path to a PGM/PNG image.")
     enroll.add_argument("--video", default=None, help="path to a BRVID file.")
+    enroll.add_argument(
+        "--allow-static", action="store_true",
+        help="skip the video liveness gate and allow enrolling a static (no-motion) clip.",
+    )
     enroll.set_defaults(handler=command_enroll)
 
     verify = subparsers.add_parser("verify", help="verify a probe against an enrolled identity.")
@@ -414,6 +439,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--any-match",
         action="store_true",
         help="accept if any one requested modality matches, instead of requiring all.",
+    )
+    verify.add_argument(
+        "--allow-static", action="store_true",
+        help="skip the video liveness gate and score a static (no-motion) clip anyway.",
     )
     verify.set_defaults(handler=command_verify)
 
