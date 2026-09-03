@@ -36,9 +36,9 @@ reassembled plaintext (the zip bytes, before any chunking) -- so a restore
 can verify integrity across the whole chunk set, not just per-chunk. Each
 chunk itself is a vault FILE record (created via
 VaultService.upsert_file_bytes) sealed under kind BUNDLE_CHUNK_KIND (see
-BUG FIX note below) rather than the standalone FILE_RECORD_KIND ("file")
-kind, so nothing about a chunk record's own sealing/opening is special --
-only its "kind" field distinguishes it as an internal bundle piece rather
+BUG FIX note below) rather than the standalone FILE_RECORD_KIND ("file"),
+so nothing about a chunk record's own sealing/opening is special -- only
+its "kind" field distinguishes it as an internal bundle piece rather
 than a real, independently-meaningful standalone file record.
 """
 import tempfile
@@ -68,6 +68,60 @@ def _iter_chunks(data: bytes, chunk_size: int):
         yield data[offset:offset + chunk_size]
 
 
+def _unique_arcname(candidate: str, used_names: set) -> str:
+    """
+    Return an archive entry name guaranteed not to collide with any name
+    already recorded in `used_names`, reserving whichever name is
+    ultimately returned.
+
+    Bugfix (v1.2.3): `_build_zip_from_paths()` previously assigned a
+    standalone file's arcname as nothing more than its own bare filename
+    (`root_path.name`), with no check against every other arcname already
+    written into the same archive. Selecting two individual files that
+    happen to share a filename -- an extremely ordinary thing to do (e.g.
+    two different folders each containing their own "report.pdf" or
+    "notes.txt", each added to the bundle one at a time via "Add Files...")
+    -- silently wrote two zip entries under the identical name. zipfile
+    permits this at write time with no error or warning of any kind. On
+    restore, `zipfile.ZipFile.extractall()` extracts entries in archive
+    order and a later entry with the same name silently overwrites an
+    earlier one on disk -- so one of the two originally-selected files was
+    permanently and silently dropped from the bundle. The bundle's own
+    manifest metadata (`files_bundled` count, `files_restored` count) still
+    reported success the entire time, since both were "extracted"; only the
+    file actually left on disk afterward was wrong. This is now caught for
+    every entry (whether from a standalone file or a walked
+    folder/drive) by tracking every arcname already used in the current
+    build: a colliding name is disambiguated by inserting " (2)", " (3)",
+    etc. before the file's extension, the same numbering convention a
+    filesystem itself uses when asked to keep two same-named files side by
+    side, so nothing is silently discarded and the disambiguated names are
+    still human-readable after restore.
+
+    Verified with two real, same-named files ("report.pdf") added
+    individually from two different source folders: before the fix, the
+    resulting bundle restored only one "report.pdf" (whichever the zip
+    format happened to extract last -- the other's bytes were gone with no
+    error); after the fix, the restore output folder correctly contains
+    both "report.pdf" and "report (2).pdf", each byte-for-byte identical to
+    its own original source file. A third same-named addition was also
+    verified to correctly become "report (3).pdf" rather than colliding
+    with the already-disambiguated "report (2).pdf".
+    """
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+    candidate_path = Path(candidate)
+    stem, suffix, parent = candidate_path.stem, candidate_path.suffix, candidate_path.parent
+    counter = 2
+    while True:
+        disambiguated = str(parent / f"{stem} ({counter}){suffix}")
+        if disambiguated not in used_names:
+            used_names.add(disambiguated)
+            return disambiguated
+        counter += 1
+
+
 def _build_zip_from_paths(paths, zip_path) -> dict:
     """Zip every file under every given path (a path may be an individual
     file, a folder, or a drive root -- os.walk/Path.rglob treat all three
@@ -78,6 +132,13 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
     reasons) rather than raising on the first unreadable file -- a locked
     system file or a permissions error partway through a large drive should
     not abort the entire operation; it should be skipped and reported.
+
+    Every arcname written into the archive -- whether a standalone file's
+    bare filename or a walked folder entry's namespaced relative path -- is
+    passed through `_unique_arcname()` before being written, so two
+    different source files that would otherwise land on the identical
+    archive entry name are disambiguated instead of silently colliding (see
+    that function's docstring for the bug this fixes).
     """
     resolved_paths = [Path(p) for p in paths]
     for p in resolved_paths:
@@ -85,10 +146,11 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
             raise BulkFileServiceError(f"path does not exist: {p}")
     file_count = 0
     skipped = []
+    used_names: set = set()
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
         for root_path in resolved_paths:
             if root_path.is_file():
-                arcname = root_path.name
+                arcname = _unique_arcname(root_path.name, used_names)
                 try:
                     archive.write(root_path, arcname=arcname)
                     file_count += 1
@@ -109,7 +171,7 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
                     relative = candidate.relative_to(root_path)
                 except ValueError:
                     continue
-                arcname = str(Path(base_name) / relative)
+                arcname = _unique_arcname(str(Path(base_name) / relative), used_names)
                 try:
                     archive.write(candidate, arcname=arcname)
                     file_count += 1

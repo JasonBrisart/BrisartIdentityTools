@@ -47,23 +47,87 @@ def _iter_chunks(data: bytes, chunk_size: int):
         yield data[offset:offset + chunk_size]
 
 
+def _unique_arcname(candidate: str, used_names: set) -> str:
+    """
+    Return an archive entry name guaranteed not to collide with any name
+    already recorded in `used_names`, reserving whichever name is
+    ultimately returned.
+
+    Bugfix (v1.2.3): identical bug to, and fixed in lockstep with,
+    vault.store.bulk_file_service's copy of this same function -- the two
+    modules deliberately duplicate this helper rather than sharing an
+    import (see this file's module docstring), so the bug existed
+    independently in both places and is fixed independently in both places.
+
+    `_build_zip_from_paths()` previously assigned a standalone file's
+    arcname as nothing more than its own bare filename (`root_path.name`),
+    with no check against every other arcname already written into the
+    same archive. Selecting two individual files that happen to share a
+    filename (e.g. two different folders each containing their own
+    "report.pdf" or "notes.txt", each added to the bundle one at a time)
+    silently wrote two zip entries under the identical name -- zipfile
+    permits this at write time with no error or warning. On restore,
+    `zipfile.ZipFile.extractall()` extracts entries in archive order and a
+    later entry with the same name silently overwrites an earlier one on
+    disk, so one of the two originally-attached files was permanently and
+    silently dropped from the bundle, while the bundle's own report
+    (`files_bundled` count, `files_restored` count) still claimed full
+    success the entire time.
+
+    Every arcname is now tracked as it is written; a colliding name is
+    disambiguated by inserting " (2)", " (3)", etc. before the file's
+    extension -- the same numbering convention a filesystem itself uses
+    when asked to keep two same-named files side by side -- so nothing is
+    silently discarded and the disambiguated names stay human-readable
+    after restore.
+
+    Verified with two real, same-named files ("report.pdf") attached to
+    the same identity from two different source folders in one
+    attach-paths call: before the fix, restore_paths() produced only one
+    "report.pdf" on disk (the other's bytes were gone with no error);
+    after the fix, the restored folder correctly contains both
+    "report.pdf" and "report (2).pdf", each byte-for-byte identical to its
+    own original source file.
+    """
+    if candidate not in used_names:
+        used_names.add(candidate)
+        return candidate
+    candidate_path = Path(candidate)
+    stem, suffix, parent = candidate_path.stem, candidate_path.suffix, candidate_path.parent
+    counter = 2
+    while True:
+        disambiguated = str(parent / f"{stem} ({counter}){suffix}")
+        if disambiguated not in used_names:
+            used_names.add(disambiguated)
+            return disambiguated
+        counter += 1
+
+
 def _build_zip_from_paths(paths, zip_path) -> dict:
     """Identical logic to vault.store.bulk_file_service._build_zip_from_paths
     (duplicated rather than imported, so biometrics/ has no import
     dependency on vault/ -- the two tools remain independently usable, per
     this project's existing separation between biometrics/, vault/, and
-    packages/)."""
+    packages/).
+
+    Every arcname written into the archive is passed through
+    `_unique_arcname()` before being written, so two different source
+    files that would otherwise land on the identical archive entry name
+    are disambiguated instead of silently colliding (see that function's
+    docstring for the bug this fixes)."""
     resolved_paths = [Path(p) for p in paths]
     for p in resolved_paths:
         if not p.exists():
             raise BulkAttachmentError(f"path does not exist: {p}")
     file_count = 0
     skipped = []
+    used_names: set = set()
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
         for root_path in resolved_paths:
             if root_path.is_file():
+                arcname = _unique_arcname(root_path.name, used_names)
                 try:
-                    archive.write(root_path, arcname=root_path.name)
+                    archive.write(root_path, arcname=arcname)
                     file_count += 1
                 except OSError as exc:
                     skipped.append({"path": str(root_path), "reason": str(exc)})
@@ -82,7 +146,7 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
                     relative = candidate.relative_to(root_path)
                 except ValueError:
                     continue
-                arcname = str(Path(base_name) / relative)
+                arcname = _unique_arcname(str(Path(base_name) / relative), used_names)
                 try:
                     archive.write(candidate, arcname=arcname)
                     file_count += 1

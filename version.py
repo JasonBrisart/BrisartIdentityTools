@@ -6,5 +6,4 @@ that needs the version imports it from here:
 
     from version import __version__
 """
-
-__version__ = "1.2.2"
+__version__ = "1.2.3"

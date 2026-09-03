@@ -4,6 +4,24 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.2.3] - 2026-09-03
+
+A patch release fixing a silent data-loss bug shared by the Vault and
+Biometrics bulk file/folder/drive bundling paths. No stored vault,
+identity, keyring, biometric-template, attachment, package, or
+custody-chain format changed. There is no data migration.
+
+### Fixed
+- **A same-named standalone file added to a bulk bundle could silently overwrite another file of the same name on restore, with zero error or warning.** `vault/store/bulk_file_service.py`'s and `biometrics/engine/bulk_attachments.py`'s (hand-duplicated, per this project's existing separation between the two tools) `_build_zip_from_paths()` assigned a standalone file's archive entry name as nothing more than its own bare filename (`root_path.name`), with no check against every other archive entry name already written into the same bundle. Selecting two individual files that happen to share a filename — an ordinary thing to do, e.g. two different folders each containing their own `report.pdf` or `notes.txt`, each added to the bundle one at a time via "Add Files..." — silently wrote two zip entries under the identical name. `zipfile` permits this at write time with no error or warning of any kind. On restore, `zipfile.ZipFile.extractall()` extracts entries in archive order, and a later entry with the same name silently overwrites an earlier one already written to disk — so one of the two originally-selected files was permanently and silently dropped from the bundle. The bundle's own reported metadata (`files_bundled` count at encrypt/attach time, `files_restored` count at restore time) continued to claim full success throughout, since both files genuinely were written into and extracted from the archive; only the file actually left on disk afterward was wrong.
+### Changed
+- **Every archive entry name (standalone file or walked folder/drive entry) is now tracked as it is written into a bulk bundle.** New `_unique_arcname()` helper (added independently to both `vault/store/bulk_file_service.py` and `biometrics/engine/bulk_attachments.py`) disambiguates a colliding name by inserting `" (2)"`, `" (3)"`, etc. before the file's extension — the same numbering convention a filesystem itself uses when asked to keep two same-named files side by side — so nothing is silently discarded and the disambiguated names remain human-readable after restore.
+### Notes
+- Backward compatible: no change to any stored record's schema, any CLI flag's name or meaning, or any function's public signature. Existing bundles created before this fix restore identically to before; the fix only changes how a *new* bundle's internal archive entry names are chosen when a collision would otherwise occur.
+- Verified with two real, same-named files (`report.pdf`) bundled from two different source folders in a single `encrypt-paths`/`attach-paths` call, on both the Vault and Biometrics code paths independently: before the fix, restoring the bundle produced only one `report.pdf` on disk (the other's bytes were gone with no error); after the fix, the restored folder correctly contains both `report.pdf` and `report (2).pdf`, each byte-for-byte identical to its own original source file. A third same-named addition was also verified to correctly become `report (3).pdf` rather than colliding with the already-disambiguated `report (2).pdf`.
+- No new external dependencies were introduced.
+
+---
+
 ## [1.2.2] - 2026-08-25
 
 A patch release fixing a metadata-loss bug in the Vault's record summary
