@@ -11,6 +11,10 @@ vault labels readable while locked, etc.), see the **Residual Risks** section
 of [`docs/BSR2_INTEGRATION.md`](docs/BSR2_INTEGRATION.md) instead — those are
 documented, accepted design tradeoffs, not open bugs.
 
+Fully fixed issues are moved to the **Resolved** section at the bottom of this
+file rather than edited in place, so the open-issues list above always
+reflects only what is genuinely still outstanding.
+
 ---
 
 ## KI-001: Video liveness threshold is uncalibrated against real camera hardware
@@ -39,35 +43,6 @@ documented, accepted design tradeoffs, not open bugs.
   static photo replays) across a few devices, measure `motion_energy` on
   each, and re-tune `DEFAULT_LIVENESS_THRESHOLD` (or make it configurable
   per deployment) once real data exists.
-
----
-
-## KI-002: GUI had no automated test coverage
-
-- **Reported date:** 2026-09-04
-- **Severity:** Low
-- **Environment:** All platforms; affects `gui/` only (CLI and application
-  layers are unaffected and already covered by `biometrics/tests/`,
-  `vault/tests/`, `packages/tests/`, `crypto/tests/`, `common/tests/`).
-- **Component:** `gui/core/`, `gui/widgets/`, `gui/tabs/`
-- **Steps to Reproduce:** Run `python tests/run_tests.py` before this issue
-  was addressed; no test files existed under any `gui/` subdirectory.
-- **Expected behavior:** Every application layer that other tools' tests
-  hold to a professional bar should have at least baseline regression
-  coverage, consistent with the rest of the repository's test discipline.
-- **Actual behavior:** `gui/` was the one subsystem with zero test files,
-  meaning a regression in the repo-root bootstrap logic, the background
-  worker/queue mechanism, or the path-selection panel's dedup logic could
-  ship silently.
-- **Tried / Ruled out:** N/A — this was a coverage gap, not a defect.
-- **Next step:** **Partially resolved.** Initial coverage was added under
-  `gui/tests/` (`test_constants.py`, `test_busy.py`, `test_path_panel.py`),
-  covering the repo-root bootstrap walk, the background-thread/queue
-  contract in `run_in_background`, and `PathSelectionPanel`'s path add/
-  dedup/remove/clear logic. Tk-dependent tests skip gracefully on a
-  headless runner with no display. Remaining gap: `gui/tabs/*.py` (the
-  actual Vault/Biometrics/Packages tab wiring) still has no direct
-  coverage and should be added incrementally.
 
 ---
 
@@ -117,3 +92,56 @@ Use this template for new entries:
 - **Tried / Ruled out:** ...
 - **Next step:** ...
 ```
+
+---
+
+## Resolved
+
+Closed issues are kept here (rather than deleted) so there is a durable
+record of what used to be broken and how/when it was fixed. Each entry keeps
+its original fields, with **Next step** replaced by **Resolved date** and
+**Resolution** once the fix has actually landed.
+
+### KI-002: GUI had no automated test coverage — RESOLVED
+
+- **Reported date:** 2026-09-04
+- **Severity:** Low
+- **Environment:** All platforms; affects `gui/` only (CLI and application
+  layers are unaffected and already covered by `biometrics/tests/`,
+  `vault/tests/`, `packages/tests/`, `crypto/tests/`, `common/tests/`).
+- **Component:** `gui/core/`, `gui/widgets/`, `gui/tabs/`
+- **Steps to Reproduce:** Run `python tests/run_tests.py` before this issue
+  was addressed; no test files existed under any `gui/` subdirectory.
+- **Expected behavior:** Every application layer that other tools' tests
+  hold to a professional bar should have at least baseline regression
+  coverage, consistent with the rest of the repository's test discipline.
+- **Actual behavior:** `gui/` was the one subsystem with zero test files,
+  meaning a regression in the repo-root bootstrap logic, the background
+  worker/queue mechanism, the path-selection panel's dedup logic, or any of
+  the three tab modules' own selection/list/refresh logic could ship
+  silently.
+- **Tried / Ruled out:** N/A — this was a coverage gap, not a defect.
+- **Resolved date:** 2026-09-07
+- **Resolution:** Full baseline coverage added under `gui/tests/`, in two
+  passes:
+  1. `test_constants.py`, `test_busy.py`, `test_path_panel.py` — covering
+     the repo-root bootstrap walk, the background-thread/queue contract in
+     `run_in_background`, and `PathSelectionPanel`'s path add/dedup/
+     remove/clear logic.
+  2. `test_tab_vault.py`, `test_tab_biometrics.py`, `test_tab_packages.py`
+     — covering the three `gui/tabs/*.py` modules directly: record/
+     identity/recipient selection helpers, the Records-vs-Files kind
+     filtering in `VaultTab`, the manifest/chunk display-name logic in
+     `BiometricsTab`'s attachment list, and `PackagesTab`'s master-key
+     derivation and recipient-list refresh.
+
+  All six files use a `_HAS_DISPLAY` skip guard: they run for real on a
+  machine with a working Tk display and skip cleanly on a headless CI
+  runner with no display. Coverage is intentionally scoped to
+  state-inspection and list-refresh logic; methods that pop a real modal
+  dialog or run a background KDF-touching operation (`_ensure_keyring`,
+  `_enroll`, `_verify`, `_create_package`, `_run_demo`, and similar) are not
+  exercised, since no user is present in an automated run to dismiss a
+  blocking dialog. Full click-through workflow simulation remains a
+  possible future addition but is not required for this issue to be
+  considered resolved.
