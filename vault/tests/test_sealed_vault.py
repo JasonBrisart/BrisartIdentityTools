@@ -1,13 +1,5 @@
 """End-to-end tests proving vault records are actually sealed, and that
 unlock/lock and wrong-passphrase behavior work correctly.
-
-Fix 1 (2026-09-08): added VaultFilePermissionTests, an integration-level
-regression test confirming vault/store/vault_file.py's create_vault_file and
-save_state actually wire up common.atomic_io's SENSITIVE_FILE_MODE, closing
-the gap where vault.json (holding the BSR2-wrapped master key) was written
-with default OS permissions despite docs/BSR2_INTEGRATION.md claiming
-owner-only protection. Skipped on Windows, where POSIX permission bits are
-not meaningfully enforceable -- see common/atomic_io.py's own docstring.
 """
 import json
 import os

@@ -1,45 +1,37 @@
 """Chunked, multi-path bulk file/folder/drive encryption on top of VaultService.
 
-WHY THIS MODULE EXISTS (the constraint that makes it necessary): BSR2's
-vendored envelope hard-caps a single sealed payload at
-vendor.brisart_security_envelope.MAX_PLAINTEXT_BYTES == 16 MiB
+WHY THIS MODULE EXISTS: BSR2's vendored envelope hard-caps a single sealed
+payload at vendor.brisart_security_envelope.MAX_PLAINTEXT_BYTES == 16 MiB
 (crypto/envelope.py's own MAX_PAYLOAD_BYTES trims that further for its
 length-prefix + padding overhead). Calling encrypt() on anything larger
-raises BrisartEnvelopeError outright -- there is no silent truncation or
-degraded behavior, it simply refuses. That means "encrypt this file" only
-works unmodified for content under roughly 16 MiB. Anything bigger --
-a large single file, a folder, an entire drive -- needs to be split into
-several separately-sealed chunks and reassembled on the way back out. This
-module is that splitting/reassembly layer, built once here so both Vault
-and Biometrics attachments can share it instead of each re-solving it.
+raises BrisartEnvelopeError outright -- no silent truncation, it simply
+refuses. So "encrypt this file" only works unmodified for content under
+roughly 16 MiB. Anything bigger -- a large single file, a folder, an entire
+drive -- must be split into several separately-sealed chunks and reassembled
+on the way back out. This module is that splitting/reassembly layer, built
+once here so both Vault and Biometrics attachments can share it.
 
 WHAT THIS MODULE DOES NOT DO: it does not stream-encrypt on the fly. A
-bundle (whether one big file or a zip of many files/folders) is first
-fully materialized as a real zip file on local disk via the stdlib
-`zipfile` module, then read back and chunked. This means the practical
-ceiling for "encrypt my whole hard drive" is realistically bounded by
-available local disk space for that temporary zip and by how long walking
-+ compressing that many files takes -- not by anything in this module's
-own logic, which has no additional size ceiling of its own beyond "how
-many chunk records can be created" (i.e. none, chunk count is unbounded).
-This is stated plainly rather than left implied: encrypting a full,
-multi-hundred-gigabyte drive is technically supported by this code but
-will take a genuinely long time and require that much free disk space for
-the intermediate zip, exactly as a normal "zip up my C: drive" operation
-would on any system.
+bundle (whether one big file or a zip of many files/folders) is first fully
+materialized as a real zip file on local disk via the stdlib `zipfile`
+module, then read back and chunked. The practical ceiling for "encrypt my
+whole drive" is therefore bounded by available local disk space for that
+temporary zip and by how long walking + compressing that many files takes --
+not by anything in this module's own logic, which has no size ceiling of its
+own beyond chunk count (i.e. none). Encrypting a full, multi-hundred-GB drive
+is technically supported but will take a genuinely long time and require that
+much free disk space for the intermediate zip.
 
-MANIFEST + CHUNK MODEL: a bulk encryption produces exactly one small
-manifest record (a completely ordinary vault JSON record, kind
-BUNDLE_MANIFEST_KIND) naming how many chunk records exist, their ordered
-record ids, the original total size, and a SHA-256 of the COMPLETE
-reassembled plaintext (the zip bytes, before any chunking) -- so a restore
-can verify integrity across the whole chunk set, not just per-chunk. Each
-chunk itself is a vault FILE record (created via
-VaultService.upsert_file_bytes) sealed under kind BUNDLE_CHUNK_KIND (see
-BUG FIX note below) rather than the standalone FILE_RECORD_KIND ("file"),
-so nothing about a chunk record's own sealing/opening is special -- only
-its "kind" field distinguishes it as an internal bundle piece rather
-than a real, independently-meaningful standalone file record.
+MANIFEST + CHUNK MODEL: a bulk encryption produces exactly one small manifest
+record (an ordinary vault JSON record, kind BUNDLE_MANIFEST_KIND) naming how
+many chunk records exist, their ordered record ids, the original total size,
+and a SHA-256 of the COMPLETE reassembled plaintext (the zip bytes, before
+chunking) -- so a restore can verify integrity across the whole chunk set,
+not just per-chunk. Each chunk is a vault FILE record (created via
+VaultService.upsert_file_bytes) sealed under kind BUNDLE_CHUNK_KIND rather
+than the standalone FILE_RECORD_KIND, so its "kind" field distinguishes it as
+an internal bundle piece rather than a real, independently-meaningful
+standalone file record.
 """
 import tempfile
 import time
@@ -53,9 +45,9 @@ BUNDLE_CHUNK_KIND = "bundle-chunk"
 
 # Conservative: real cap (crypto.envelope.MAX_PAYLOAD_BYTES) is ~16 MiB minus
 # 264 bytes. 8 MiB leaves comfortable headroom and keeps each individual
-# chunk's BSR2 seal/open call (and the vault's single JSON write per
-# upsert) a reasonable size to hold in memory at once, rather than pushing
-# right up against the hard ceiling.
+# chunk's BSR2 seal/open call (and the vault's single JSON write per upsert) a
+# reasonable size to hold in memory at once, rather than pushing right up
+# against the hard ceiling.
 DEFAULT_CHUNK_BYTES = 8 * 1024 * 1024
 
 
@@ -69,44 +61,19 @@ def _iter_chunks(data: bytes, chunk_size: int):
 
 
 def _unique_arcname(candidate: str, used_names: set) -> str:
-    """
-    Return an archive entry name guaranteed not to collide with any name
-    already recorded in `used_names`, reserving whichever name is
-    ultimately returned.
+    """Return an archive entry name that does not collide with any name
+    already in `used_names`, reserving whichever name is returned.
 
-    Bugfix (v1.2.3): `_build_zip_from_paths()` previously assigned a
-    standalone file's arcname as nothing more than its own bare filename
-    (`root_path.name`), with no check against every other arcname already
-    written into the same archive. Selecting two individual files that
-    happen to share a filename -- an extremely ordinary thing to do (e.g.
-    two different folders each containing their own "report.pdf" or
-    "notes.txt", each added to the bundle one at a time via "Add Files...")
-    -- silently wrote two zip entries under the identical name. zipfile
-    permits this at write time with no error or warning of any kind. On
-    restore, `zipfile.ZipFile.extractall()` extracts entries in archive
-    order and a later entry with the same name silently overwrites an
-    earlier one on disk -- so one of the two originally-selected files was
-    permanently and silently dropped from the bundle. The bundle's own
-    manifest metadata (`files_bundled` count, `files_restored` count) still
-    reported success the entire time, since both were "extracted"; only the
-    file actually left on disk afterward was wrong. This is now caught for
-    every entry (whether from a standalone file or a walked
-    folder/drive) by tracking every arcname already used in the current
-    build: a colliding name is disambiguated by inserting " (2)", " (3)",
-    etc. before the file's extension, the same numbering convention a
-    filesystem itself uses when asked to keep two same-named files side by
-    side, so nothing is silently discarded and the disambiguated names are
-    still human-readable after restore.
+    Two selected files can share a bare filename (e.g. two folders each with
+    their own "report.pdf"). Without disambiguation, zipfile writes both
+    under the same entry with no error, and extractall() silently overwrites
+    one on restore -- so a file would be lost with the bundle still reporting
+    success. A colliding name is disambiguated by inserting " (2)", " (3)",
+    etc. before the extension, the same convention a filesystem uses, so
+    nothing is silently discarded and names stay readable after restore.
 
-    Verified with two real, same-named files ("report.pdf") added
-    individually from two different source folders: before the fix, the
-    resulting bundle restored only one "report.pdf" (whichever the zip
-    format happened to extract last -- the other's bytes were gone with no
-    error); after the fix, the restore output folder correctly contains
-    both "report.pdf" and "report (2).pdf", each byte-for-byte identical to
-    its own original source file. A third same-named addition was also
-    verified to correctly become "report (3).pdf" rather than colliding
-    with the already-disambiguated "report (2).pdf".
+    (Deliberately duplicated in biometrics.engine.bulk_attachments rather than
+    shared, so the two tools keep no import dependency on each other.)
     """
     if candidate not in used_names:
         used_names.add(candidate)
@@ -124,21 +91,18 @@ def _unique_arcname(candidate: str, used_names: set) -> str:
 
 def _build_zip_from_paths(paths, zip_path) -> dict:
     """Zip every file under every given path (a path may be an individual
-    file, a folder, or a drive root -- os.walk/Path.rglob treat all three
-    identically, since a drive root is simply a folder with no parent) into
-    a single archive at `zip_path`, preserving each entry's path relative to
-    a common ancestor so the original directory structure can be restored
-    later. Returns a small report dict (file count, skipped-file count and
-    reasons) rather than raising on the first unreadable file -- a locked
-    system file or a permissions error partway through a large drive should
-    not abort the entire operation; it should be skipped and reported.
+    file, a folder, or a drive root -- rglob treats all three identically,
+    since a drive root is simply a folder with no parent) into a single
+    archive at `zip_path`, preserving each entry's path relative to a common
+    ancestor so the original directory structure can be restored later.
+    Returns a small report dict (file count, skipped-file count and reasons)
+    rather than raising on the first unreadable file -- a locked system file
+    or a permissions error partway through a large drive should be skipped and
+    reported, not abort the whole operation.
 
-    Every arcname written into the archive -- whether a standalone file's
-    bare filename or a walked folder entry's namespaced relative path -- is
-    passed through `_unique_arcname()` before being written, so two
-    different source files that would otherwise land on the identical
-    archive entry name are disambiguated instead of silently colliding (see
-    that function's docstring for the bug this fixes).
+    Every arcname is passed through `_unique_arcname()` before being written,
+    so two source files that would otherwise land on the identical archive
+    entry name are disambiguated instead of silently colliding.
     """
     resolved_paths = [Path(p) for p in paths]
     for p in resolved_paths:
@@ -157,12 +121,11 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
                 except OSError as exc:
                     skipped.append({"path": str(root_path), "reason": str(exc)})
                 continue
-            # Folder (or drive root, which is just a folder with no parent
-            # and no files directly explainable as a single "file" case
-            # above): walk every file underneath it, preserving the
-            # relative structure under a top-level folder named after the
-            # root itself, so restoring multiple selected folders together
-            # never collides their contents into one flat namespace.
+            # Folder (or drive root, which is just a folder with no parent):
+            # walk every file underneath it, preserving the relative structure
+            # under a top-level folder named after the root itself, so
+            # restoring multiple selected folders together never collides
+            # their contents into one flat namespace.
             base_name = root_path.name or root_path.drive.rstrip(":\\/") or "root"
             for candidate in root_path.rglob("*"):
                 if not candidate.is_file():
@@ -196,13 +159,12 @@ class BulkFileService:
         """Seal arbitrary bytes of ANY size, transparently chunking if the
         content exceeds a single BSR2 envelope's hard 16 MiB limit.
 
-        For content that fits in one envelope, this is functionally
-        identical to VaultService.upsert_file_bytes (still produces a
-        manifest wrapper for a UNIFORM restore path regardless of size --
-        see restore_bytes below -- rather than silently branching into two
-        different record shapes depending on size, which would force every
-        caller to guess which kind of record they're dealing with before
-        reading it back).
+        For content that fits in one envelope, this is functionally identical
+        to VaultService.upsert_file_bytes (still produces a manifest wrapper
+        for a UNIFORM restore path regardless of size -- see restore_bytes --
+        rather than silently branching into two different record shapes
+        depending on size, which would force every caller to guess which kind
+        of record they're reading back).
         """
         self._require_unlocked()
         if not isinstance(data, (bytes, bytearray)):
@@ -212,22 +174,12 @@ class BulkFileService:
         chunk_summaries = []
         chunk_index = 0
         for chunk in _iter_chunks(data, self.chunk_bytes) if data else [b""]:
-            # BUG FIX (2026-08-25): chunk records were previously created
-            # with VaultService.upsert_file_bytes's DEFAULT kind
-            # ("file" / FILE_RECORD_KIND), which is the exact same kind a
-            # genuinely standalone single-file record uses (e.g. one
-            # created via `vault.app encrypt-file`, or a small bundle whose
-            # content fits in a single chunk). That made a bundle's
-            # internal chunk records indistinguishable from real
-            # standalone files: they cluttered the GUI's "Files / Folders
-            # / Drives" list as if each chunk were its own file, AND the
-            # GUI's "Decrypt / Restore Selected" button always assumed
-            # every selected "file"-kind record was a JSON bundle
-            # manifest, so selecting a genuine standalone file record (or
-            # an internal chunk, if a user found one) crashed instead of
-            # decrypting it directly. Chunks are now sealed under the
-            # distinct BUNDLE_CHUNK_KIND so they can be told apart from
-            # both standalone files and the manifest itself.
+            # Chunks are sealed under BUNDLE_CHUNK_KIND (not the standalone
+            # FILE_RECORD_KIND) so a bundle's internal chunk records stay
+            # distinguishable from a real standalone single-file record -- for
+            # both listing (chunks are hidden from the file list) and restore
+            # (a standalone file decrypts directly; a manifest restores via
+            # zip). See VaultService.upsert_file_bytes's `kind` parameter.
             chunk_summary = self.vault_service.upsert_file_bytes(
                 f"{label} (part {chunk_index})", chunk,
                 original_filename=f"{original_filename}.part{chunk_index}",
@@ -290,16 +242,13 @@ class BulkFileService:
     def upsert_paths(self, paths, label: str, record_id: str = None) -> dict:
         """THE entry point for 'encrypt any combination of files, folders,
         and drives, all at once': zips every real file found under every
-        given path (files are added directly; folders and drive roots are
-        walked recursively, preserving their relative structure -- see
-        _build_zip_from_paths) into one temporary archive, then seals that
-        archive's bytes via upsert_large_bytes, transparently chunking if
-        the resulting zip exceeds 16 MiB. `paths` may freely mix individual
-        files, folders, and drive roots (e.g. ["C:\\report.pdf",
-        "C:\\Users\\me\\Photos", "D:\\"]) in a single call -- this is the
-        literal "everything combined" behavior requested: one bundle, one
-        manifest record, one restore operation, regardless of how many
-        distinct files/folders/drives contributed to it.
+        given path (files added directly; folders and drive roots walked
+        recursively, preserving relative structure) into one temporary
+        archive, then seals that archive's bytes via upsert_large_bytes,
+        transparently chunking if the resulting zip exceeds 16 MiB. `paths`
+        may freely mix individual files, folders, and drive roots in a single
+        call -- one bundle, one manifest record, one restore operation,
+        regardless of how many distinct files/folders/drives contributed.
         """
         self._require_unlocked()
         if not paths:
@@ -322,8 +271,8 @@ class BulkFileService:
 
     def restore_paths(self, manifest_record_id: str, output_dir) -> dict:
         """Reassemble a upsert_paths() bundle and unzip it back into a real
-        directory tree at `output_dir`, restoring every file/folder that
-        was originally selected, with their relative structure intact.
+        directory tree at `output_dir`, restoring every file/folder that was
+        originally selected, with their relative structure intact.
         """
         zip_bytes = self.restore_bytes(manifest_record_id)
         output_dir = Path(output_dir)

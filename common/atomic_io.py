@@ -9,31 +9,6 @@ unified, because a report is regenerable and a vault is not.
 A reader sees either the old file or the fully-written new one, never a
 half-written file: bytes land in a uniquely-named temp file that is os.replace-d
 into position only after being flushed and fsync-ed.
-
-Fix 1 (2026-09-08): docs/BSR2_INTEGRATION.md and biometrics/README.md both
-claim keyring/vault files carrying a BSR2-wrapped master key are "created on
-first use with mode 0600 ... and the loader warns if the mode is later
-widened." That claim was aspirational, not implemented -- vault/store/
-vault_file.py's create_vault_file/save_state and biometrics/app.py's
-_load_or_create_keyring both wrote their JSON with whatever default
-permissions the process umask produced, and nothing ever checked permissions
-on load. This module now provides the actual mechanism those two call sites
-wire up to:
-  - atomic_write_text/atomic_write_json gained an optional file_mode
-    parameter. When given, the freshly-written file is chmod'd to exactly
-    that mode immediately after the atomic rename, before this function
-    returns. When omitted (the default, None), behavior is byte-for-byte
-    identical to before this fix -- every existing caller that does not pass
-    file_mode is unaffected.
-  - warn_if_permissive() lets a caller check an already-on-disk file (at load
-    time) and print an advisory to stderr if it is more permissive than
-    expected, without raising and without blocking the load.
-Both are no-ops on Windows (os.name == "nt"), for the same reason
-_flush_directory already no-ops there: os.chmod on Windows cannot express
-POSIX owner/group/other bits the way SENSITIVE_FILE_MODE (0o600) intends, so
-attempting to enforce it there would be a false sense of protection rather
-than a real one. On Windows, protecting these files is a filesystem/ACL
-concern outside what this module can portably guarantee.
 """
 import json
 import os

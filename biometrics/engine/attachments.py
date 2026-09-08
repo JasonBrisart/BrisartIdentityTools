@@ -10,13 +10,13 @@ what was attached. Nothing here ever inspects a file's name or contents to
 decide how to handle it; every attachment is handled exactly the same way
 regardless of what it actually is.
 
-Sealed under the SAME master key templates already use (this project's
-existing device-key/keyring path -- see biometrics/README.md's "Storage
-Model" section), bound to a context naming both the identity id and the
-attachment's filename (crypto.context.attachment_context), so a sealed
-attachment can never be moved to a different identity, or relabeled under
-a different filename, without failing authentication -- exactly the same
-protection template_context already gives modality templates.
+Sealed under the same keyring master key templates use (see
+crypto.keyring and biometrics/README.md's "Storage Model" section), bound
+to a context naming both the identity id and the attachment's filename
+(crypto.context.attachment_context), so a sealed attachment can never be
+moved to a different identity, or relabeled under a different filename,
+without failing authentication -- exactly the same protection
+template_context already gives modality templates.
 """
 from pathlib import Path
 

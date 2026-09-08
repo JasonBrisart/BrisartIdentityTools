@@ -1,3 +1,49 @@
+"""Vault orchestration: unlock/lock, and sealed create/read/update/delete.
+
+This is the vault's application layer -- the single place that ties together
+the vault's keyring, its record model, its on-disk file, and its audit log
+into the operations the CLI (vault.app) and GUI (gui.tabs.tab_vault) actually
+call. It owns no file format details of its own: reading and writing the
+vault file is vault.store.vault_file's job, record shape/validation is
+vault.records.record_model's job, and the master-key wrapping is
+crypto.keyring's job. This module only sequences them, holds the unlocked
+master key for the session, and records an audit event for every mutation.
+
+COMMUNICATION RELATIONSHIPS
+- crypto.keyring.Keyring: unwraps the master key on unlock(); held in memory
+  for the session so each record operation is fast (one slow KDF per session,
+  not per operation -- see docs/BSR2_INTEGRATION.md's "KDF cost" section).
+- crypto.envelope (seal_json/open_json for JSON records; seal_bytes/open_bytes
+  for raw file records) bound to a crypto.context.record_context, so a
+  ciphertext cannot be moved between records without failing authentication.
+- vault.store.vault_file: all persistence; writes go through it atomically and
+  with owner-only (0600) permissions since the file holds the wrapped key.
+- vault.records.record_model: validate_record / new_record / replace_payload /
+  public_summary define and enforce record shape; this module never fabricates
+  a record dict by hand.
+- vault.reports.audit_log: every created/updated/deleted/unlocked/locked event
+  is recorded to a separate audit directory when one is configured.
+- vault.store.bulk_file_service builds on upsert_file_bytes/get_file_bytes here
+  to add chunking for content past BSR2's single-envelope size limit.
+
+KEY DESIGN DECISIONS
+- Record *shells* (record_id, kind, label, timestamps, and for file records
+  the plaintext original_filename/size/sha256) stay readable so list_records()
+  works while locked; only the payload value is sealed. This metadata trade-off
+  is deliberate and documented in vault/README.md.
+- upsert_file_bytes seals raw bytes with seal_bytes (never seal_json), so an
+  arbitrary file -- any extension, or binary that is not valid JSON at all --
+  round-trips byte-for-byte. Its `kind` parameter lets callers like
+  BulkFileService mark internal bundle chunks (BUNDLE_CHUNK_KIND) distinctly
+  from a genuinely standalone file (FILE_RECORD_KIND), so the two are never
+  conflated in listings or restore logic.
+- batch_upsert validates every item *before* mutating the in-memory records
+  map, so a bad item in the batch fails the whole batch without partially
+  committing (the all-or-nothing contract its tests pin).
+- Authentication failures from the crypto layer are re-raised as
+  VaultServiceError with the record id named, so callers catch one exception
+  family and never a vendor exception type.
+"""
 from pathlib import Path
 
 from common.hashing import sha256_bytes
@@ -12,7 +58,7 @@ from vault.records.record_model import (
 )
 from vault.reports import audit_log
 from vault.store.vault_file import (
-create_vault_file, load_records, load_state, save_keyring, save_records,
+    create_vault_file, load_records, load_state, save_keyring, save_records,
 )
 
 # The vault record "kind" reserved for arbitrary raw-file payloads created by

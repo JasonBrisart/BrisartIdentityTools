@@ -87,29 +87,15 @@ def replace_payload(record: dict, new_payload_envelope: dict, timestamps: dict) 
     return updated
 
 
-# ============================================================================
-# BUG (found 2026-08-25): public_summary() dropped every plaintext metadata
-# field a file/bundle record carries (original_filename, file_size_bytes,
-# file_sha256 -- see vault.store.vault_service.upsert_file_bytes, which sets
-# these directly on the record dict alongside the standard record fields).
-#
-# Reproduction: VaultService.upsert_file_bytes(...) returns a summary WITH
-# file_size_bytes (it merges those fields in manually after calling
-# public_summary). But VaultService.list_records() -- the function the GUI's
-# "Files / Folders / Drives" tab calls on every refresh -- ALSO calls
-# public_summary() per record, and that call site has no such manual merge.
-# The old public_summary() below only ever returned record_id/label/kind/
-# created_at/updated_at, so every refresh of that GUI list silently dropped
-# the Size column back to "" for every single file record, even though the
-# vault file on disk has the real size sitting right there in the clear.
-#
-# Fix: return the optional plaintext metadata fields whenever they are
-# present on the record, instead of only the fixed five keys. This is
-# additive and backward compatible -- a record with no such fields (a normal
-# JSON/"note"/"credential" record, or a "bundle-manifest" record, whose size
-# is sealed inside its encrypted payload and genuinely isn't available here)
-# is summarized exactly as before.
-# ============================================================================
+# A file/bundle record carries three optional plaintext metadata fields
+# (original_filename, file_size_bytes, file_sha256) set directly on the record
+# by vault.store.vault_service.upsert_file_bytes. They are returned here
+# whenever present so list_records()/get_summary() (which call public_summary
+# directly) surface a file's size/name/hash, not just the five fields every
+# record kind shares. Additive and backward compatible: an ordinary
+# note/credential record, or a bundle-manifest record (whose size is sealed
+# inside its payload and genuinely isn't available here), gains none of these
+# keys and is summarized exactly as before.
 _OPTIONAL_PLAINTEXT_FIELDS = ("original_filename", "file_size_bytes", "file_sha256")
 
 

@@ -11,24 +11,6 @@ this module and a JSON viewer.
 
 Writes go through :mod:`common.atomic_io` so a crash or power loss mid-write
 cannot leave a half-written vault file behind.
-
-Fix 1 (2026-09-08): this file's own module docstring (and
-docs/BSR2_INTEGRATION.md's Biometrics section, which describes the analogous
-biometrics keyring the same way) claimed a vault file is protected with
-owner-only permissions and that a widened permission is flagged. Neither was
-actually implemented -- create_vault_file and save_state wrote the file with
-whatever default permissions the process umask produced, and load_state never
-inspected permissions at all. This vault.json is exactly the file that holds
-the BSR2-wrapped master key (both the passphrase- and recovery-code-wrapped
-copies), so its filesystem permissions matter independently of BSR2's own
-encryption. create_vault_file and save_state now request
-common.atomic_io.SENSITIVE_FILE_MODE (0o600) on every write, and load_state
-calls common.atomic_io.warn_if_permissive() after a successful read so a file
-that predates this fix, or was widened by hand afterward, is flagged to
-stderr instead of silently trusted. Both are no-ops on Windows (see
-common/atomic_io.py's own docstring for why); this is a defense-in-depth
-improvement for POSIX deployments, not a claim that Windows filesystem
-permissions are being enforced.
 """
 import json
 from pathlib import Path

@@ -2,7 +2,6 @@
 
 Three formats were previously redefined across three files; all three are kept
 here because they serve different needs:
-
 * utc_now              ISO-8601 to the second. Was in vault time_tools and LabID
                        identity_record.
 * filename_timestamp   filename-safe stamp to the second. Was vault utc_stamp.
@@ -11,6 +10,11 @@ here because they serve different needs:
                        written in the same second from colliding on filename.
 
 All timezone-aware UTC. The old naive-local helper is intentionally dropped.
+
+``utc_now_iso`` is an alias of ``utc_now``: every consumer in this repository
+(vault, biometrics, and packages timestamp call sites) imports ``utc_now_iso``,
+so both names are kept -- ``utc_now`` for any external dependant, ``utc_now_iso``
+because it is what every actual call site here uses.
 """
 import datetime as _dt
 
@@ -20,16 +24,6 @@ def utc_now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
 
-# BUG FIX (see docs/CHANGELOG.md): every consumer in this repository --
-# vault/core/time_tools.py, vault/reports/audit_log.py,
-# biometrics/identity/identity_store.py, biometrics/reports/report_writer.py,
-# packages/custody.py, and packages/audit.py -- imports `utc_now_iso`, not
-# `utc_now`. Without this alias, importing any of those modules raised
-# `ImportError: cannot import name 'utc_now_iso' from 'common.timestamps'`,
-# which broke the vault, biometrics, and packages tools entirely (nothing
-# that touched a timestamp could even be imported). Both names are kept:
-# `utc_now` in case anything external already depends on it, `utc_now_iso`
-# because it is what every actual call site in this repository uses.
 utc_now_iso = utc_now
 
 

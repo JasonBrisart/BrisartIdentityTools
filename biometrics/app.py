@@ -19,19 +19,6 @@ frame clip) is refused/reported as a non-match. See
 biometrics/features/liveness.py's module docstring for exactly what this
 gate does and does not detect.
 
-Fix 1 (2026-09-08): the biometrics keyring file (keyring.json) holds the
-BSR2-wrapped master key for every enrolled identity's templates and
-attachments, but it was written with whatever default permissions the
-process umask produced, and its permissions were never re-checked on
-subsequent loads. This mirrors the same gap fixed the same day in
-vault/store/vault_file.py, and the same fix is applied here:
-_load_or_create_keyring now writes a freshly created keyring.json with
-owner-only permissions (common.atomic_io.SENSITIVE_FILE_MODE) via
-atomic_write_json instead of a plain open()/json.dump(), and warns to
-stderr (common.atomic_io.warn_if_permissive) if an existing keyring.json is
-found more permissive than that when loaded. Both are no-ops on Windows;
-see common/atomic_io.py's own docstring for why.
-
 Invoked either directly (``python biometrics/app.py ...``) or through the
 unified dispatcher (``python cli.py biometrics ...``, which sets ``sys.argv``
 and calls :func:`main`).

@@ -85,7 +85,9 @@ Consequences, all deliberate:
 
 Iteration counts are recorded per keyring and **validated on read**. A tampered
 keyring header requesting a cheap derivation is rejected rather than honoured,
-which would otherwise make the KDF trivially brute-forceable.
+which would otherwise make the KDF trivially brute-forceable; an astronomically
+large count is likewise rejected before it can turn an unlock into a years-long
+derivation.
 
 ## Factor protection is split by entropy
 
@@ -163,7 +165,8 @@ attacker calling a verify function in a loop against a running process.
 
 Limiter state is **persisted by the caller**, not held in memory. An in-memory
 counter resets whenever the process restarts, which an attacker controls for
-free.
+free. The limiter is available as a building block; wiring it into a specific
+unlock path is the responsibility of the tool that owns that path.
 
 ## Error handling
 
@@ -193,31 +196,54 @@ That is a deliberate trade. The vault leaks that a record labelled `bank-login`
 exists while protecting its value. Encrypting labels would require decrypting
 every record for any lookup, making the CLI unusable for listing and searching.
 
+The vault file (`vault.json`) holds the BSR2-wrapped master key (both the
+passphrase- and recovery-code-wrapped copies) in its `keyring` section. Since
+1.3.2 it is written with owner-only (`0600`) permissions on POSIX platforms via
+`common/atomic_io.py`'s `file_mode` parameter, and its permissions are checked
+on load (`warn_if_permissive`), so a file predating this fix or widened by hand
+is flagged to stderr. This is filesystem defense-in-depth, not a strengthening
+of BSR2 — see the note under **Biometrics** below on how that permission is
+applied and its one limitation.
+
 ### Biometrics
 
-Biometric templates are sealed under a local **device key**
-(`biometrics/identity/device_key.py`), bound to identity id and modality.
-Identity records stay readable so `list` and `inspect` work without the key.
+Biometric templates are sealed under a local **passphrase keyring**
+(`crypto/keyring.py`), the same master-key-wrapping construction the vault uses,
+bound to identity id and modality via `crypto/context.py`. Enrolling or
+verifying unlocks the keyring once per invocation through `getpass` and holds
+the master key for that run. Identity records stay readable so `list` and
+`inspect` work without unlocking; only the template payloads are encrypted.
 
-Why a device key rather than a passphrase: biometrics runs as an unattended
-local verification service. Nobody is present at unlock time, and the CLI is
-invoked repeatedly in CI, so a ~90-second derivation per invocation would make
-it unusable.
+The keyring file (`biometrics/data/keyring.json`) holds the BSR2-wrapped master
+key. Since 1.3.2 it is created with owner-only (`0600`) permissions on POSIX
+platforms and checked on load, exactly as the vault file is. **How that 0600 is
+applied:** both files are written by `common/atomic_io.py`, which creates a
+uniquely-named temp file (under the process umask), writes and fsyncs it,
+`os.replace`s it into position, and then `chmod`s the result to `0600`. The
+chmod happens immediately after the atomic rename, not at creation time, so
+there is a brief window in which the temp file exists at umask permissions
+before it is tightened — this is filesystem hardening, not an atomic
+`open(..., 0o600)` guarantee. On Windows the whole mechanism is a no-op, since
+`os.chmod` cannot express POSIX owner/group/other bits; protecting these files
+there is a filesystem/ACL concern outside what this code claims.
 
-The device key is 32 random bytes, created on first use with mode `0600` via
-`os.open` so it is never briefly world-readable, and the loader warns if the mode
-is later widened. It refuses to overwrite an existing key, since that would
-silently orphan every template sealed under the old one.
+A separate, deliberately weak **device binding**
+(`biometrics/identity/device_key.py`) records a keyed-MAC of machine-specific
+fingerprint material (hostname, platform string, MAC address) under the master
+key. It is one more thing an attacker must reproduce on a different machine, not
+a security boundary in its own right, and it stores only a bound value — there
+is no separate device-key file to protect.
 
 **This protects against:** template contents disclosed through a copied file, a
 backup, a stale disk image, or a bug-report attachment; silent tampering to
 weaken a match; substitution of templates between identities or modalities.
 
-**This does not protect against:** anyone who can read the key file. It sits
-beside the data it protects, so local filesystem read access decrypts every
-template. That is inherent to unattended operation, not a defect to be fixed by
-relocating the file. Use an encrypted volume or restrict the directory to the
-service account if that matters.
+**This does not protect against:** anyone who can read the keyring file *and*
+knows the passphrase, or who can observe the master key in the process's memory
+while it is unlocked. The keyring sits beside the data it protects, so the
+passphrase (or recovery code) is the real boundary; use an encrypted volume or
+restrict the directory to the service account if the on-disk keyring itself must
+be protected at rest beyond its `0600` mode.
 
 ### Packages
 
@@ -242,15 +268,20 @@ entry is a caller-supplied string, not cryptographically bound to a signing
 key.
 
 Open order matters: cheap structural checks (format, custody chain,
-authorization, key-slot presence) run before expensive factor verification, so a
-tampered package is rejected without paying for a derivation.
+authorization, key-slot presence) run before the recipient's factor
+verification, so a structurally tampered package is rejected without doing
+unnecessary cryptographic work.
 
 ## Key material and the repository
 
-`device_key.json`, `*.identity`, `*.ibp`, and the runtime `data/` directories
-under `biometrics/`, `vault/`, and `packages/` are gitignored. A device key
-decrypts every template in its directory; an identity file holds a keyring.
-None belong in version control.
+The runtime `data/` directories under `biometrics/`, `vault/`, and `packages/`
+are gitignored. They hold real identity records, sealed biometric templates
+(including the biometrics `keyring.json`), verification reports, sealed vault
+files, and sealed packages. A keyring decrypts every template beside it once its
+passphrase is known; none of this belongs in version control. `*.identity`,
+`*.ibp`, and a legacy `device_key.json` name are also gitignored for defense in
+depth (the current biometrics build stores a keyring, not a device-key file, but
+the ignore entry is kept so no such file could ever be committed by accident).
 
 ## Residual risks
 
@@ -264,9 +295,16 @@ None belong in version control.
    dump.
 4. **Vault labels readable while locked.** Metadata disclosure, accepted for
    usability.
-5. **Biometrics device key co-located with its data.** Documented above.
+5. **Keyrings co-located with the data they protect.** Both the vault and the
+   biometrics keyring sit beside their own encrypted data, protected at rest by
+   BSR2 and by a `0600` file mode on POSIX. Anyone who can read the keyring file
+   and knows the passphrase (or holds the recovery code) has full access; the
+   `0600` mode is defense-in-depth, not the boundary.
 6. **No forward secrecy.** Compromising a master key exposes everything ever
    sealed under it.
 7. **Biometric matching is threshold-based hand-rolled DSP**, not a trained
-   model, and there is no liveness/anti-spoofing gate in the current
-   implementation.
+   model. The video modality has a motion-presence liveness gate (1.3.0) that
+   refuses static single-frame clips, but it is not general anti-spoofing (it
+   does not detect a played-back recording, a wobbled photo, or a mask/deepfake)
+   and is uncalibrated against real camera hardware. No other modality has any
+   liveness or anti-spoofing check.

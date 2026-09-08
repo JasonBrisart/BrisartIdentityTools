@@ -48,46 +48,20 @@ def _iter_chunks(data: bytes, chunk_size: int):
 
 
 def _unique_arcname(candidate: str, used_names: set) -> str:
-    """
-    Return an archive entry name guaranteed not to collide with any name
-    already recorded in `used_names`, reserving whichever name is
-    ultimately returned.
+    """Return an archive entry name that does not collide with any name
+    already in `used_names`, reserving whichever name is returned.
 
-    Bugfix (v1.2.3): identical bug to, and fixed in lockstep with,
-    vault.store.bulk_file_service's copy of this same function -- the two
-    modules deliberately duplicate this helper rather than sharing an
-    import (see this file's module docstring), so the bug existed
-    independently in both places and is fixed independently in both places.
+    Two selected files can share a bare filename (e.g. two folders each with
+    their own "report.pdf"). Without disambiguation, zipfile writes both
+    under the same entry with no error, and extractall() silently overwrites
+    one on restore -- so a file would be lost with the bundle still reporting
+    success. A colliding name is disambiguated by inserting " (2)", " (3)",
+    etc. before the extension, the same convention a filesystem uses, so
+    nothing is silently discarded and names stay readable after restore.
 
-    `_build_zip_from_paths()` previously assigned a standalone file's
-    arcname as nothing more than its own bare filename (`root_path.name`),
-    with no check against every other arcname already written into the
-    same archive. Selecting two individual files that happen to share a
-    filename (e.g. two different folders each containing their own
-    "report.pdf" or "notes.txt", each added to the bundle one at a time)
-    silently wrote two zip entries under the identical name -- zipfile
-    permits this at write time with no error or warning. On restore,
-    `zipfile.ZipFile.extractall()` extracts entries in archive order and a
-    later entry with the same name silently overwrites an earlier one on
-    disk, so one of the two originally-attached files was permanently and
-    silently dropped from the bundle, while the bundle's own report
-    (`files_bundled` count, `files_restored` count) still claimed full
-    success the entire time.
-
-    Every arcname is now tracked as it is written; a colliding name is
-    disambiguated by inserting " (2)", " (3)", etc. before the file's
-    extension -- the same numbering convention a filesystem itself uses
-    when asked to keep two same-named files side by side -- so nothing is
-    silently discarded and the disambiguated names stay human-readable
-    after restore.
-
-    Verified with two real, same-named files ("report.pdf") attached to
-    the same identity from two different source folders in one
-    attach-paths call: before the fix, restore_paths() produced only one
-    "report.pdf" on disk (the other's bytes were gone with no error);
-    after the fix, the restored folder correctly contains both
-    "report.pdf" and "report (2).pdf", each byte-for-byte identical to its
-    own original source file.
+    (This helper is deliberately duplicated in
+    vault.store.bulk_file_service rather than shared, so biometrics/ keeps no
+    import dependency on vault/.)
     """
     if candidate not in used_names:
         used_names.add(candidate)
@@ -104,17 +78,13 @@ def _unique_arcname(candidate: str, used_names: set) -> str:
 
 
 def _build_zip_from_paths(paths, zip_path) -> dict:
-    """Identical logic to vault.store.bulk_file_service._build_zip_from_paths
-    (duplicated rather than imported, so biometrics/ has no import
-    dependency on vault/ -- the two tools remain independently usable, per
-    this project's existing separation between biometrics/, vault/, and
-    packages/).
-
-    Every arcname written into the archive is passed through
-    `_unique_arcname()` before being written, so two different source
-    files that would otherwise land on the identical archive entry name
-    are disambiguated instead of silently colliding (see that function's
-    docstring for the bug this fixes)."""
+    """Zip every file under every given path into `zip_path`, preserving
+    relative structure. Duplicated (not imported) from
+    vault.store.bulk_file_service so biometrics/ has no import dependency on
+    vault/. Every arcname is passed through `_unique_arcname()` so two source
+    files that would map to the same entry name are disambiguated instead of
+    silently colliding.
+    """
     resolved_paths = [Path(p) for p in paths]
     for p in resolved_paths:
         if not p.exists():
@@ -132,12 +102,11 @@ def _build_zip_from_paths(paths, zip_path) -> dict:
                 except OSError as exc:
                     skipped.append({"path": str(root_path), "reason": str(exc)})
                 continue
-            # Folder (or drive root, which is just a folder with no parent
-            # and no files directly explainable as a single "file" case
-            # above): walk every file underneath it, preserving the
-            # relative structure under a top-level folder named after the
-            # root itself, so restoring multiple selected folders together
-            # never collides their contents into one flat namespace.
+            # Folder (or drive root, which is just a folder with no parent):
+            # walk every file underneath it, preserving the relative structure
+            # under a top-level folder named after the root itself, so
+            # restoring multiple selected folders together never collides
+            # their contents into one flat namespace.
             base_name = root_path.name or root_path.drive.rstrip(":\\/") or "root"
             for candidate in root_path.rglob("*"):
                 if not candidate.is_file():
@@ -197,11 +166,9 @@ def restore_large_bytes(record: dict, name: str, master_key: bytes) -> bytes:
         raise BulkAttachmentError(f"manifest for {name!r} is missing required fields.")
     if len(manifest["chunk_names"]) != manifest["chunk_count"]:
         raise BulkAttachmentError("manifest chunk count does not match its chunk name list.")
-    # BUG FIX (2026-08-24): a missing/deleted chunk previously let
-    # AttachmentError escape uncaught from extract_attachment_bytes here,
-    # instead of the BulkAttachmentError this module's own restore/attach
-    # calls otherwise raise for every other failure mode. Wrapped so a
-    # missing chunk is reported consistently with the rest of this module.
+    # Wrap so a missing/deleted chunk is reported as a BulkAttachmentError
+    # (this module's own failure type) rather than letting AttachmentError
+    # escape uncaught, consistent with every other failure mode here.
     try:
         pieces = [extract_attachment_bytes(record, chunk_name, master_key)
                  for chunk_name in manifest["chunk_names"]]
@@ -273,9 +240,9 @@ def remove_bulk_attachment(record: dict, name: str, master_key: bytes) -> dict:
             record = remove_identity_attachment(record, chunk_name)
     except (AttachmentError, UnicodeDecodeError, json.JSONDecodeError):
         # Manifest could not be decrypted or parsed (wrong key, or it was
-        # already removed) -- chunk names can't be identified in that
-        # case, but the manifest attachment itself is still cleaned up
-        # below instead of leaving the caller with no way to remove a
-        # bundle whose manifest has become unreadable.
+        # already removed) -- chunk names can't be identified in that case,
+        # but the manifest attachment itself is still cleaned up below so the
+        # caller is never left with no way to remove a bundle whose manifest
+        # has become unreadable.
         pass
     return remove_identity_attachment(record, f"{name}{_MANIFEST_SUFFIX}")

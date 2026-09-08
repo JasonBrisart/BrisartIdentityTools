@@ -1,16 +1,6 @@
 """Tests for the shared common/ utilities: atomic writes, hashing, and the
 UTC timestamp helpers -- including the utc_now_iso alias whose absence broke
 every tool's imports (see docs/CHANGELOG.md 1.0.0 'Fixed').
-
-Fix 1 (2026-09-08): added AtomicIoPermissionTests, covering the file_mode
-parameter and warn_if_permissive() added to common/atomic_io.py to close the
-gap where vault.json and biometrics keyring.json (both holding a
-BSR2-wrapped master key) were written with default OS permissions and never
-checked on load, despite docs/BSR2_INTEGRATION.md claiming otherwise. Every
-test in that new class is skipped on Windows (os.name == "nt"), since
-file_mode/warn_if_permissive are themselves no-ops there -- see
-common/atomic_io.py's own docstring for why POSIX permission bits are not
-meaningfully enforceable on Windows.
 """
 import json
 import os
