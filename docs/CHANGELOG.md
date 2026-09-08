@@ -4,6 +4,65 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.1] - 2026-09-07
+
+A documentation and test-coverage release. No stored vault, identity,
+keyring, biometric-template, attachment, package, or custody-chain format
+changed. There is no data migration.
+
+### Added
+- **`docs/SECURITY.md`**: new file. Describes how to report a security
+  vulnerability privately (GitHub Private Vulnerability Reporting preferred,
+  direct maintainer contact as fallback), response-time expectations, in-scope
+  vs. out-of-scope components (`vendor/` is out of scope but still forwarded
+  upstream), and restates the standing BSR2 research-cryptography caveat from
+  `docs/BSR2_INTEGRATION.md` without softening it.
+- **`docs/KNOWN_ISSUES.md`**: new file. Tracks open, non-trivial issues using
+  a standardized bug-report template (Reported date / Severity / Environment /
+  Component / Steps to Reproduce / Expected behavior / Actual behavior /
+  Tried-Ruled-out / Next step). Initial entries: KI-001 (video liveness
+  threshold uncalibrated against real camera hardware), KI-002 (GUI test
+  coverage gap, now partially resolved by this release's new `gui/tests/`),
+  and KI-003 (bulk file/folder/drive encryption's ~1.4 KB/s throughput
+  ceiling, a documented BSR2 limitation rather than a defect).
+- **`tools/envinfo.py`**: new standalone diagnostic script. Prints OS,
+  machine/processor architecture, Python version/architecture, and Tcl/Tk
+  version in one block, meant to be pasted directly into a `KNOWN_ISSUES.md`
+  bug report's Environment field. Reads only OS/Python/Tk metadata; never
+  modifies anything or sends data anywhere.
+- **`gui/tests/test_constants.py`**: new regression tests for
+  `gui.core.constants._find_repo_root()`, the repo-root bootstrap walk every
+  other `gui` module depends on at import time. Covers finding the root when
+  `version.py` is two levels up, one level up, when no `version.py` exists
+  anywhere in the chain (graceful fallback rather than a crash), and when
+  multiple `version.py` files exist at different levels (nearest one wins).
+  Also covers `APP_TITLE`, `_MODALITY_FILETYPES`, and `_Cancelled`.
+- **`gui/tests/test_busy.py`**: new regression tests for
+  `gui.core.busy.run_in_background` and `BusyDialog` — the background-
+  thread/queue contract every slow (BSR2 KDF-touching) GUI action goes
+  through. Covers the success path, the error path (with and without an
+  `on_error` handler), and that `work()` genuinely runs off the main thread.
+- **`gui/tests/test_path_panel.py`**: new regression tests for
+  `gui.widgets.path_panel.PathSelectionPanel` — the shared file/folder/drive
+  picker used by both the Vault "Files / Folders / Drives" sub-tab and the
+  Biometrics "File Attachments" sub-tab. Covers add/dedup/remove/clear
+  behavior, first-seen ordering, and the `on_change` callback.
+
+### Changed
+- **`version.py`**: bumped `__version__` from `1.3.0` to `1.3.1`.
+
+### Notes
+- All three `gui/tests/` files use a `_HAS_DISPLAY` skip guard: they run for
+  real on a machine with a working Tk display (any normal desktop) and skip
+  cleanly on a headless CI runner with no display, consistent with how GUI
+  tests are conventionally handled when CI doesn't provision a display.
+- `gui/tabs/*.py` (the actual Vault/Biometrics/Packages tab wiring) still has
+  no direct test coverage; this remains open as the "Next step" in
+  `docs/KNOWN_ISSUES.md`'s KI-002 entry.
+- No new external dependencies were introduced.
+
+---
+
 ## [1.3.0] - 2026-09-03
 
 Re-introduces a video-modality liveness/anti-spoofing GATE, closing the gap
