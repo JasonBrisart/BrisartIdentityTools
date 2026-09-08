@@ -1,6 +1,17 @@
 """End-to-end tests proving vault records are actually sealed, and that
-unlock/lock and wrong-passphrase behavior work correctly."""
+unlock/lock and wrong-passphrase behavior work correctly.
+
+Fix 1 (2026-09-08): added VaultFilePermissionTests, an integration-level
+regression test confirming vault/store/vault_file.py's create_vault_file and
+save_state actually wire up common.atomic_io's SENSITIVE_FILE_MODE, closing
+the gap where vault.json (holding the BSR2-wrapped master key) was written
+with default OS permissions despite docs/BSR2_INTEGRATION.md claiming
+owner-only protection. Skipped on Windows, where POSIX permission bits are
+not meaningfully enforceable -- see common/atomic_io.py's own docstring.
+"""
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +41,7 @@ class SealedVaultTests(unittest.TestCase):
         # real algorithm constant (crypto.vendor.ALGORITHM /
         # vendor.brisart_security_envelope.ALGORITHM) is "BSR2-ARX-SPONGE-ETM".
         # The old assertion always failed even though sealing itself was
-        # correct; see docs/BUGFIX_2026-08-24.md for the bug-fix entry.
+        # correct.
         self.assertEqual(envelope["algorithm"], "BSR2-ARX-SPONGE-ETM")
         self.assertIn("ciphertext", envelope)
 
@@ -79,9 +90,36 @@ class SealedVaultTests(unittest.TestCase):
 
     def test_create_refuses_to_overwrite_existing_vault(self):
         from vault.store.vault_file import VaultFileError
-
         with self.assertRaises(VaultFileError):
             VaultService.create(self.vault_path, "another passphrase")
+
+
+@unittest.skipIf(os.name == "nt", "POSIX permission bits are not enforced on Windows")
+class VaultFilePermissionTests(unittest.TestCase):
+    """Fix 1 (2026-09-08): create_vault_file/save_state must chmod vault.json
+    to owner-only (0600), since it holds the BSR2-wrapped master key."""
+
+    def setUp(self):
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.vault_path = Path(self._tmp_dir.name) / "vault.json"
+
+    def tearDown(self):
+        self._tmp_dir.cleanup()
+
+    def _mode_of(self, path: Path) -> int:
+        return stat.S_IMODE(path.stat().st_mode)
+
+    def test_create_vault_file_writes_owner_only_permissions(self):
+        service, _ = VaultService.create(self.vault_path, "a passphrase for testing")
+        self.assertEqual(self._mode_of(self.vault_path), 0o600)
+
+    def test_save_state_re_applies_owner_only_permissions_after_widening(self):
+        service, _ = VaultService.create(self.vault_path, "a passphrase for testing")
+        # Simulate the file having been widened by hand (or by a pre-fix
+        # version of this code) after creation.
+        self.vault_path.chmod(0o644)
+        service.upsert("Note", "note", {"value": 1})
+        self.assertEqual(self._mode_of(self.vault_path), 0o600)
 
 
 if __name__ == "__main__":

@@ -4,18 +4,36 @@ A vault is one JSON file containing a :mod:`crypto.keyring` state (the
 wrapped master key) and a flat map of record id to sealed vault record. This
 module owns reading and writing that file only -- it has no opinion about
 what a valid record looks like (that is
-``vault.records.record_model``'s job) or how unlocking and mutation should be
-orchestrated (``vault.store.vault_service``'s job). Keeping this layer thin
+`vault.records.record_model`'s job) or how unlocking and mutation should be
+orchestrated (`vault.store.vault_service`'s job). Keeping this layer thin
 means the on-disk format can be inspected or repaired with nothing more than
 this module and a JSON viewer.
 
 Writes go through :mod:`common.atomic_io` so a crash or power loss mid-write
 cannot leave a half-written vault file behind.
+
+Fix 1 (2026-09-08): this file's own module docstring (and
+docs/BSR2_INTEGRATION.md's Biometrics section, which describes the analogous
+biometrics keyring the same way) claimed a vault file is protected with
+owner-only permissions and that a widened permission is flagged. Neither was
+actually implemented -- create_vault_file and save_state wrote the file with
+whatever default permissions the process umask produced, and load_state never
+inspected permissions at all. This vault.json is exactly the file that holds
+the BSR2-wrapped master key (both the passphrase- and recovery-code-wrapped
+copies), so its filesystem permissions matter independently of BSR2's own
+encryption. create_vault_file and save_state now request
+common.atomic_io.SENSITIVE_FILE_MODE (0o600) on every write, and load_state
+calls common.atomic_io.warn_if_permissive() after a successful read so a file
+that predates this fix, or was widened by hand afterward, is flagged to
+stderr instead of silently trusted. Both are no-ops on Windows (see
+common/atomic_io.py's own docstring for why); this is a defense-in-depth
+improvement for POSIX deployments, not a claim that Windows filesystem
+permissions are being enforced.
 """
 import json
 from pathlib import Path
 
-from common.atomic_io import atomic_write_json
+from common.atomic_io import SENSITIVE_FILE_MODE, atomic_write_json, warn_if_permissive
 from crypto.keyring import Keyring
 
 VAULT_FORMAT = "brisart-identity-tools/vault-file/v1"
@@ -34,33 +52,42 @@ def _empty_state(keyring_state: dict) -> dict:
 
 
 def vault_exists(path) -> bool:
-    """Report whether a vault file already exists at ``path``."""
+    """Report whether a vault file already exists at `path`."""
     return Path(path).is_file()
 
 
 def create_vault_file(path, passphrase: str):
-    """Create a brand-new vault file protected by ``passphrase``.
+    """Create a brand-new vault file protected by `passphrase`.
 
-    Returns ``(keyring, recovery_code)``. Refuses to overwrite an existing
+    Returns `(keyring, recovery_code)`. Refuses to overwrite an existing
     file, since doing so would silently discard every record already stored
-    there.
+    there. The file is written with owner-only permissions
+    (common.atomic_io.SENSITIVE_FILE_MODE) on POSIX platforms, since it holds
+    the BSR2-wrapped master key for every record in the vault.
     """
     resolved = Path(path)
     if resolved.is_file():
         raise VaultFileError(f"a vault file already exists at {resolved}.")
     keyring, recovery_code = Keyring.create(passphrase)
     state = _empty_state(keyring.to_state())
-    atomic_write_json(resolved, state)
+    atomic_write_json(resolved, state, file_mode=SENSITIVE_FILE_MODE)
     return keyring, recovery_code
 
 
 def load_state(path) -> dict:
     """Load and validate the raw vault file structure.
 
-    Returns the whole on-disk dict (``format``, ``keyring``, ``records``).
+    Returns the whole on-disk dict (`format`, `keyring`, `records`).
     Callers that only need the keyring or only need records should use
     :func:`load_keyring` or :func:`load_records` instead of re-validating
     this themselves.
+
+    After a successful load, this checks the file's on-disk permissions and
+    prints an advisory to stderr (via common.atomic_io.warn_if_permissive)
+    if they are more permissive than owner-only -- a no-op on Windows and a
+    no-op if the file already matches. This never blocks or fails the load;
+    it is advisory only, since BSR2's own encryption is the real protection
+    for the wrapped master key inside.
     """
     resolved = Path(path)
     if not resolved.is_file():
@@ -78,6 +105,7 @@ def load_state(path) -> dict:
         raise VaultFileError("vault file is missing a valid keyring section.")
     if not isinstance(state.get("records"), dict):
         raise VaultFileError("vault file is missing a valid records section.")
+    warn_if_permissive(resolved, label="vault file")
     return state
 
 
@@ -88,15 +116,20 @@ def load_keyring(path) -> Keyring:
 
 
 def load_records(path) -> dict:
-    """Load just the records map from a vault file: ``{record_id: record}``."""
+    """Load just the records map from a vault file: `{record_id: record}`."""
     return load_state(path)["records"]
 
 
 def save_state(path, state: dict) -> None:
-    """Persist the whole vault file structure atomically."""
+    """Persist the whole vault file structure atomically.
+
+    Written with owner-only permissions (common.atomic_io.SENSITIVE_FILE_MODE)
+    on POSIX platforms, matching create_vault_file, since every write to this
+    file re-writes the section holding the BSR2-wrapped master key.
+    """
     if state.get("format") != VAULT_FORMAT:
         raise VaultFileError("state does not have the expected vault format marker.")
-    atomic_write_json(Path(path), state)
+    atomic_write_json(Path(path), state, file_mode=SENSITIVE_FILE_MODE)
 
 
 def save_keyring(path, keyring: Keyring) -> None:

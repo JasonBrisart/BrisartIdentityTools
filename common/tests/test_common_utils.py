@@ -1,13 +1,32 @@
 """Tests for the shared common/ utilities: atomic writes, hashing, and the
 UTC timestamp helpers -- including the utc_now_iso alias whose absence broke
-every tool's imports (see docs/CHANGELOG.md 1.0.0 'Fixed')."""
+every tool's imports (see docs/CHANGELOG.md 1.0.0 'Fixed').
+
+Fix 1 (2026-09-08): added AtomicIoPermissionTests, covering the file_mode
+parameter and warn_if_permissive() added to common/atomic_io.py to close the
+gap where vault.json and biometrics keyring.json (both holding a
+BSR2-wrapped master key) were written with default OS permissions and never
+checked on load, despite docs/BSR2_INTEGRATION.md claiming otherwise. Every
+test in that new class is skipped on Windows (os.name == "nt"), since
+file_mode/warn_if_permissive are themselves no-ops there -- see
+common/atomic_io.py's own docstring for why POSIX permission bits are not
+meaningfully enforceable on Windows.
+"""
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 
 from common import timestamps
-from common.atomic_io import AtomicWriteError, atomic_write_json, atomic_write_text
+from common.atomic_io import (
+    AtomicWriteError,
+    SENSITIVE_FILE_MODE,
+    atomic_write_json,
+    atomic_write_text,
+    warn_if_permissive,
+)
 from common.hashing import sha256_bytes, sha256_file
 
 
@@ -95,6 +114,63 @@ class AtomicIoTests(unittest.TestCase):
         atomic_write_json(target, {"ok": True}, fsync_dir=False)
         leftovers = [p for p in self.tmp.iterdir() if p.name.endswith(".tmp")]
         self.assertEqual(leftovers, [])
+
+
+@unittest.skipIf(os.name == "nt", "POSIX permission bits are not enforced on Windows")
+class AtomicIoPermissionTests(unittest.TestCase):
+    """Fix 1 (2026-09-08): file_mode / warn_if_permissive regression coverage."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _mode_of(self, path: Path) -> int:
+        return stat.S_IMODE(path.stat().st_mode)
+
+    def test_atomic_write_text_applies_requested_file_mode(self):
+        target = self.tmp / "secret.txt"
+        atomic_write_text(target, "shh", fsync_dir=False, file_mode=SENSITIVE_FILE_MODE)
+        self.assertEqual(self._mode_of(target), SENSITIVE_FILE_MODE)
+
+    def test_atomic_write_json_applies_requested_file_mode(self):
+        target = self.tmp / "secret.json"
+        atomic_write_json(target, {"master_key": "wrapped"}, fsync_dir=False,
+                          file_mode=SENSITIVE_FILE_MODE)
+        self.assertEqual(self._mode_of(target), SENSITIVE_FILE_MODE)
+
+    def test_omitting_file_mode_does_not_force_sensitive_mode(self):
+        # atomic_write_* always creates a brand-new temp file and os.replace()s
+        # it into place (that is what makes the write atomic), so a target's
+        # permissions were never "preserved" across writes even before this
+        # fix -- each write's temp file gets the process umask's default
+        # permissions. What this fix must NOT do is start forcing
+        # SENSITIVE_FILE_MODE onto every write; omitting file_mode must
+        # produce the same umask-determined permissions as any other file
+        # written directly, not the 0600 used by the vault/keyring call sites.
+        target = self.tmp / "ordinary.json"
+        atomic_write_json(target, {"v": 1}, fsync_dir=False, file_mode=SENSITIVE_FILE_MODE)
+        self.assertEqual(self._mode_of(target), SENSITIVE_FILE_MODE)
+        atomic_write_json(target, {"v": 2}, fsync_dir=False)
+        baseline = self.tmp / "baseline.json"
+        baseline.write_text("{}")
+        self.assertEqual(self._mode_of(target), self._mode_of(baseline))
+
+    def test_warn_if_permissive_flags_an_overly_open_file(self):
+        target = self.tmp / "open.json"
+        atomic_write_json(target, {"v": 1}, fsync_dir=False)
+        target.chmod(0o644)
+        self.assertTrue(warn_if_permissive(target, label="test file"))
+
+    def test_warn_if_permissive_is_silent_for_a_correctly_restricted_file(self):
+        target = self.tmp / "restricted.json"
+        atomic_write_json(target, {"v": 1}, fsync_dir=False, file_mode=SENSITIVE_FILE_MODE)
+        self.assertFalse(warn_if_permissive(target))
+
+    def test_warn_if_permissive_is_silent_for_a_missing_file(self):
+        self.assertFalse(warn_if_permissive(self.tmp / "does_not_exist.json"))
 
 
 if __name__ == "__main__":

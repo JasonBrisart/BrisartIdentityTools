@@ -4,6 +4,69 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.2] - 2026-09-08
+
+A security-hardening patch closing a doc/code mismatch: `docs/BSR2_INTEGRATION.md`
+and `biometrics/README.md` both claimed that files holding a BSR2-wrapped master
+key are "created on first use with mode 0600 ... and the loader warns if the mode
+is later widened." That protection did not actually exist in the code. No stored
+vault, identity, keyring, biometric-template, attachment, package, or
+custody-chain format changed. There is no data migration.
+
+### Security
+
+- **`vault.json` and the biometrics `keyring.json` are now written with
+  owner-only (0600) permissions on POSIX platforms, and widened permissions are
+  now flagged.** Both files hold a BSR2-wrapped master key -- `vault.json`'s
+  `keyring` section, and the standalone biometrics `keyring.json` -- but
+  `vault/store/vault_file.py`'s `create_vault_file`/`save_state` and
+  `biometrics/app.py`'s `_load_or_create_keyring` previously wrote them with
+  whatever default permissions the process umask produced, and neither ever
+  inspected permissions on load. `common/atomic_io.py`'s `atomic_write_text`/
+  `atomic_write_json` gained an optional `file_mode` parameter (new constant
+  `SENSITIVE_FILE_MODE = 0o600`); both call sites now request it on every
+  write. A new `warn_if_permissive()` helper is called after every vault-file
+  load (`vault_file.load_state`) and every keyring-file load
+  (`biometrics.app._load_or_create_keyring`), printing an advisory to stderr
+  if the file on disk is more permissive than 0600 -- catching a file that
+  predates this fix, or one that was widened by hand afterward. Both
+  `file_mode` and `warn_if_permissive` are no-ops on Windows (`os.name ==
+  "nt"`), for the same reason `atomic_io._flush_directory` already no-ops
+  there: `os.chmod` cannot express POSIX owner/group/other bits the way
+  `SENSITIVE_FILE_MODE` intends, so enforcing it there would be a false sense
+  of protection rather than a real one.
+
+### Added
+
+- `common/tests/test_common_utils.py`: new `AtomicIoPermissionTests` class
+  covering `file_mode` (applies the requested mode; omitting it does not
+  force `SENSITIVE_FILE_MODE` onto ordinary writes) and `warn_if_permissive`
+  (flags an overly-open file, stays silent for a correctly-restricted or
+  missing one). Skipped on Windows.
+- `vault/tests/test_sealed_vault.py`: new `VaultFilePermissionTests` class
+  confirming `VaultService.create` writes `vault.json` at 0600, and that a
+  subsequent `upsert` re-applies 0600 even if the file was widened by hand in
+  between. Skipped on Windows.
+
+### Notes
+
+- No stored format changed and no shipped module's cryptographic behavior
+  changed; 1.3.1 vaults, identities, keyrings, templates, and packages load
+  unchanged.
+- This is filesystem-permission hardening only. It does not change, and does
+  not claim to strengthen, BSR2's own encryption -- the wrapped master key
+  inside these files is exactly as protected by BSR2 as it was in 1.3.1. The
+  1.3.1 security caveats (BSR2 is unreviewed research crypto, the package
+  custody chain is tamper-evident rather than a digital signature, losing
+  both a vault's passphrase and recovery code is unrecoverable by design)
+  are unchanged and still apply.
+- On Windows (this project's primary development platform per `version.py`'s
+  own git history), this patch is a no-op by design; protecting these files
+  there is a filesystem/ACL concern outside what `os.chmod` can portably
+  guarantee, and is intentionally not claimed here.
+
+---
+
 ## [1.3.1] - 2026-09-07
 
 A documentation and test-coverage release. No stored vault, identity,

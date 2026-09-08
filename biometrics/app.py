@@ -19,6 +19,19 @@ frame clip) is refused/reported as a non-match. See
 biometrics/features/liveness.py's module docstring for exactly what this
 gate does and does not detect.
 
+Fix 1 (2026-09-08): the biometrics keyring file (keyring.json) holds the
+BSR2-wrapped master key for every enrolled identity's templates and
+attachments, but it was written with whatever default permissions the
+process umask produced, and its permissions were never re-checked on
+subsequent loads. This mirrors the same gap fixed the same day in
+vault/store/vault_file.py, and the same fix is applied here:
+_load_or_create_keyring now writes a freshly created keyring.json with
+owner-only permissions (common.atomic_io.SENSITIVE_FILE_MODE) via
+atomic_write_json instead of a plain open()/json.dump(), and warns to
+stderr (common.atomic_io.warn_if_permissive) if an existing keyring.json is
+found more permissive than that when loaded. Both are no-ops on Windows;
+see common/atomic_io.py's own docstring for why.
+
 Invoked either directly (``python biometrics/app.py ...``) or through the
 unified dispatcher (``python cli.py biometrics ...``, which sets ``sys.argv``
 and calls :func:`main`).
@@ -37,6 +50,7 @@ from biometrics.identity.identity_record import public_summary
 from biometrics.identity.identity_store import IdentityStore, IdentityStoreError
 from biometrics.reports import report_writer
 from biometrics.samples import sample_generator
+from common.atomic_io import SENSITIVE_FILE_MODE, atomic_write_json, warn_if_permissive
 from crypto.errors import Bsr2IntegrationError
 from crypto.keyring import Keyring
 
@@ -59,11 +73,19 @@ def _load_or_create_keyring() -> Keyring:
     A newly created keyring's recovery code is printed once to stderr, since
     it is never stored in recoverable form and this is the only chance the
     operator has to see it.
+
+    The keyring file itself is written with owner-only permissions
+    (SENSITIVE_FILE_MODE) on POSIX platforms, since it holds the BSR2-wrapped
+    master key for every enrolled identity. Loading an existing file checks
+    its permissions and prints an advisory to stderr if it is more
+    permissive than that -- see this module's Fix 1 note and
+    common/atomic_io.py's warn_if_permissive docstring.
     """
     path = _keyring_path()
     if path.is_file():
         with open(path, "r", encoding="utf-8") as handle:
             state = json.load(handle)
+        warn_if_permissive(path, label="biometrics keyring")
         return Keyring(state)
     print(
         "No keyring found; creating a new one for this biometrics data directory.",
@@ -74,8 +96,7 @@ def _load_or_create_keyring() -> Keyring:
     if passphrase != confirm:
         raise AppError("passphrases did not match.")
     keyring, recovery_code = Keyring.create(passphrase)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(keyring.to_state(), handle, indent=2, sort_keys=True)
+    atomic_write_json(path, keyring.to_state(), file_mode=SENSITIVE_FILE_MODE)
     print(
         "\nSAVE THIS RECOVERY CODE NOW. It is shown only once and cannot be "
         f"recovered later:\n\n    {recovery_code}\n",
