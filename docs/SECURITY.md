@@ -80,7 +80,7 @@ independent cryptanalysis, formal verification, or production security review.
 Upstream's own `SECURITY.md` states it should not be the sole protection for
 credentials, identity records, or recovery secrets — and that caveat is
 inherited here without being softened. See
-[`docs/BSR2_INTEGRATION.md`](docs/BSR2_INTEGRATION.md) for the full threat
+[`BSR2_INTEGRATION.md`](BSR2_INTEGRATION.md) for the full threat
 model, what each protection actually buys, and the documented residual risks.
 Reports that point out gaps between what that document claims and what the
 code actually does are especially welcome.
