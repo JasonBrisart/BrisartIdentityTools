@@ -8,7 +8,7 @@ and easy to scan.
 For the deeper, ongoing research-cryptography caveats that apply to the whole
 project by design (BSR2 being unreviewed research crypto, no forward secrecy,
 vault labels readable while locked, etc.), see the **Residual Risks** section
-of [`docs/BSR2_INTEGRATION.md`](docs/BSR2_INTEGRATION.md) instead — those are
+of [`BSR2_INTEGRATION.md`](BSR2_INTEGRATION.md) instead — those are
 documented, accepted design tradeoffs, not open bugs.
 
 Fully fixed issues are moved to the **Resolved** section at the bottom of this
@@ -67,7 +67,7 @@ reflects only what is genuinely still outstanding.
   `biometrics/tests/test_bulk_attachments.py`); the ceiling is inherent to
   BSR2, not the chunking layer built on top of it.
 - **Next step:** Already documented explicitly in
-  [`docs/FULL_FILE_ENCRYPTION.md`](docs/FULL_FILE_ENCRYPTION.md)
+  [`FULL_FILE_ENCRYPTION.md`](FULL_FILE_ENCRYPTION.md)
   so users size expectations correctly (individual files/folders, not full
   drives, in a reasonable timeframe). No code change planned unless a
   faster (still dependency-free) primitive is adopted.
