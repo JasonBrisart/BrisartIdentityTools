@@ -67,7 +67,7 @@ reflects only what is genuinely still outstanding.
   `biometrics/tests/test_bulk_attachments.py`); the ceiling is inherent to
   BSR2, not the chunking layer built on top of it.
 - **Next step:** Already documented explicitly in
-  [`docs/README_FULL_FILE_ENCRYPTION.md`](docs/README_FULL_FILE_ENCRYPTION.md)
+  [`docs/FULL_FILE_ENCRYPTION.md`](docs/FULL_FILE_ENCRYPTION.md)
   so users size expectations correctly (individual files/folders, not full
   drives, in a reasonable timeframe). No code change planned unless a
   faster (still dependency-free) primitive is adopted.
