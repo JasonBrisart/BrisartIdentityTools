@@ -25,6 +25,11 @@ HEADER_STRUCT = struct.Struct(">8sIIII")
 MAX_DIMENSION = 8192
 MAX_FRAME_COUNT = 100_000  # generous ceiling; guards a corrupt header from
 # driving an unbounded read.
+MAX_BODY_BYTES = 512 * 1024 * 1024  # overall ceiling on the concatenated frame
+# body. width, height, and frame_count are each individually bounded above,
+# but their PRODUCT was not, so a header sitting at each individual maximum
+# implied a body far larger than any real clip and forced a large slice
+# allocation before the length mismatch could even be detected.
 
 
 class VideoFormatError(ValueError):
@@ -88,6 +93,14 @@ def decode(data: bytes) -> dict:
         raise VideoFormatError("frame_rate must be positive.")
     frame_bytes = width * height
     expected_body = frame_count * frame_bytes
+    # Fix 1 (2026-09-09): bound frame_count * width * height BEFORE slicing the
+    # body, so a header whose fields are each individually valid cannot
+    # multiply into an absurd expected-body size and force a large allocation
+    # before the length mismatch below is reached.
+    if expected_body > MAX_BODY_BYTES:
+        raise VideoFormatError(
+            "frame_count * width * height exceeds the supported body-size ceiling."
+        )
     body = data[HEADER_STRUCT.size:]
     if len(body) != expected_body:
         raise VideoFormatError(

@@ -113,6 +113,16 @@ def block_grid_means(width: int, height: int, pixels: bytes, grid_size: int) -> 
     _check_image(width, height, pixels)
     if grid_size < 1:
         raise ImageToolsError("grid_size must be at least 1.")
+    # Fix 1 (2026-09-09): reject a grid_size larger than the image in either
+    # dimension. Previously such a grid produced zero-width/zero-height blocks
+    # whose `count` was 0, and the `total / count if count else 0.0` guard
+    # silently substituted 0.0 -- yielding a feature vector that looked valid
+    # but was meaningless. A misconfigured extractor now fails loudly instead
+    # of producing a degenerate template.
+    if grid_size > width or grid_size > height:
+        raise ImageToolsError(
+            "grid_size cannot exceed the image's width or height."
+        )
     row_bounds = _partition(height, grid_size)
     col_bounds = _partition(width, grid_size)
     means = []

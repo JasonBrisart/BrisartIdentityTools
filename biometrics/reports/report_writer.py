@@ -16,7 +16,7 @@ import secrets
 from pathlib import Path
 
 from common.atomic_io import atomic_write_json
-from common.timestamps import utc_now_iso
+from common.timestamps import microsecond_timestamp, utc_now_iso
 
 REPORT_FORMAT = "brisart-identity-tools/biometrics-report/v1"
 _SUFFIX_BYTES = 4
@@ -27,7 +27,14 @@ class ReportWriterError(ValueError):
 
 
 def _report_filename(event_type: str, identity_id: str) -> str:
-    timestamp = utc_now_iso().replace(":", "").replace("+", "Z")
+    # Fix 1 (2026-09-09): use a microsecond-precision, filename-safe stamp
+    # rather than the second-precision utc_now_iso() this previously derived
+    # its name from. The random suffix already prevented outright collisions,
+    # but two events in the same second sorted only by that random suffix;
+    # microsecond precision makes list_reports() sort a burst of
+    # enroll/verify events deterministically oldest-first, matching the
+    # ordering guarantee list_reports()'s own docstring already states.
+    timestamp = microsecond_timestamp()
     suffix = secrets.token_hex(_SUFFIX_BYTES)
     return f"{timestamp}_{event_type}_{identity_id}_{suffix}.json"
 

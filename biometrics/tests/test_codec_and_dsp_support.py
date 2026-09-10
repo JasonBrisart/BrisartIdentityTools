@@ -1,5 +1,6 @@
 """Round-trip and correctness tests for biometrics.codecs.*"""
 import unittest
+import zlib
 
 from biometrics.codecs import dsp, image_tools, pgm, png
 
@@ -49,6 +50,22 @@ class PngRoundTripTests(unittest.TestCase):
         with self.assertRaises(png.PngFormatError):
             png.decode(bytes(encoded))
 
+    def test_rejects_decompression_bomb(self):
+        # Fix 1 (2026-09-09): a well-formed 1x1 header whose IDAT decompresses
+        # to far more than the 1*(1+1)=2 scanline bytes those dimensions allow
+        # must be refused as a decompression bomb, not decompressed whole.
+        import struct
+        ihdr = struct.pack(">IIBBBBB", 1, 1, png.BIT_DEPTH, png.COLOR_TYPE_GRAYSCALE, 0, 0, 0)
+        bomb_idat = zlib.compress(b"\x00" * 100_000)
+        crafted = (
+            png.PNG_SIGNATURE
+            + png._chunk(b"IHDR", ihdr)
+            + png._chunk(b"IDAT", bomb_idat)
+            + png._chunk(b"IEND", b"")
+        )
+        with self.assertRaises(png.PngFormatError):
+            png.decode(crafted)
+
 
 class ImageToolsTests(unittest.TestCase):
     def test_crop_center_smaller_than_source(self):
@@ -91,6 +108,15 @@ class ImageToolsTests(unittest.TestCase):
         self.assertEqual(len(means), 16)
         for value in means:
             self.assertAlmostEqual(value, 50.0)
+
+    def test_block_grid_means_rejects_oversized_grid(self):
+        # Fix 1 (2026-09-09): a grid_size larger than either dimension used to
+        # produce zero-size blocks whose mean silently defaulted to 0.0,
+        # yielding a valid-looking but meaningless feature vector. It must now
+        # raise instead.
+        pixels = bytes([50] * (4 * 4))
+        with self.assertRaises(image_tools.ImageToolsError):
+            image_tools.block_grid_means(4, 4, pixels, 8)
 
     def test_sobel_gradient_flat_image_is_zero(self):
         width, height = 5, 5

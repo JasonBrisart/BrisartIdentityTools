@@ -31,6 +31,18 @@ class VideoCodecTests(unittest.TestCase):
         with self.assertRaises(video.VideoFormatError):
             video.decode(b"NOTVIDEO" + b"\x00" * 20)
 
+    def test_rejects_body_over_ceiling_before_slicing(self):
+        # Fix 1 (2026-09-09): width, height, and frame_count are each within
+        # their individual maxima, but their product implies a body far larger
+        # than MAX_BODY_BYTES. decode() must refuse based on the header alone,
+        # before attempting to slice a body of that size.
+        header = video.HEADER_STRUCT.pack(
+            video.MAGIC, video.MAX_DIMENSION, video.MAX_DIMENSION,
+            video.MAX_FRAME_COUNT, 5,
+        )
+        with self.assertRaises(video.VideoFormatError):
+            video.decode(header + b"")
+
     def test_probe_reports_header_without_reading_frames(self):
         width, height = 4, 4
         frames = [bytes([1] * (width * height))]

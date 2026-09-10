@@ -7,10 +7,21 @@ import getpass
 import json
 import sys
 from pathlib import Path
+
 from vault.config import settings
 from vault.store.vault_file import VaultFileError, vault_exists
 from vault.store.vault_service import VaultService, VaultServiceError
 from vault.store.bulk_file_service import BulkFileService, BulkFileServiceError
+
+
+# The largest --chunk-mb the bulk path will accept. A single BSR2 envelope
+# hard-caps at ~16 MiB (vendor.brisart_security_envelope.MAX_PLAINTEXT_BYTES),
+# and crypto.envelope.MAX_PAYLOAD_BYTES trims that slightly further for its
+# length prefix and padding. A --chunk-mb of 16 or more produces chunks that
+# BSR2's envelope refuses to seal, so the whole operation would fail partway
+# through with a confusing envelope error rather than a clear argument error.
+# 15 MiB leaves comfortable headroom under the ceiling.
+MAX_CHUNK_MB = 15
 
 
 class AppError(ValueError):
@@ -123,6 +134,17 @@ def command_encrypt_paths(args) -> int:
     folders/drives (which will almost always be over that cap), are both
     transparently chunked and reassembled correctly; the caller never
     needs to think about the size limit at all."""
+    # Fix 1 (2026-09-09): reject a --chunk-mb at or above the single-envelope
+    # ceiling up front. Previously the value was passed straight through to
+    # BulkFileService with no upper bound, so a value of 16 or more produced
+    # chunks BSR2's envelope refuses to seal, failing the whole operation
+    # partway through with a confusing envelope error instead of a clear
+    # argument error before any work was done.
+    if args.chunk_mb < 1 or args.chunk_mb > MAX_CHUNK_MB:
+        raise AppError(
+            f"--chunk-mb must be between 1 and {MAX_CHUNK_MB} (a single BSR2 "
+            "envelope caps at ~16 MiB)."
+        )
     service = _open_service(args)
     _unlock(service)
     bulk = BulkFileService(service, chunk_bytes=args.chunk_mb * 1024 * 1024)
@@ -238,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
                                help="defaults to the first path's own name.")
     encrypt_paths.add_argument("--record-id", default=None)
     encrypt_paths.add_argument("--chunk-mb", type=int, default=8,
-                               help="chunk size in MiB (default 8; must stay under ~16).")
+                               help=f"chunk size in MiB (default 8; must be 1..{MAX_CHUNK_MB}).")
     encrypt_paths.set_defaults(handler=command_encrypt_paths)
 
     restore_paths = subparsers.add_parser(

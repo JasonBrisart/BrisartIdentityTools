@@ -123,6 +123,7 @@ def decode(data: bytes) -> dict:
     data = bytes(data)
     if not data.startswith(PNG_SIGNATURE):
         raise PngFormatError("not a PNG file (bad signature).")
+
     width = height = None
     idat_parts = []
     saw_ihdr = False
@@ -147,14 +148,40 @@ def decode(data: bytes) -> dict:
             idat_parts.append(payload)
         elif chunk_type == b"IEND":
             break
+
     if not saw_ihdr:
         raise PngFormatError("missing IHDR chunk.")
     if not idat_parts:
         raise PngFormatError("missing IDAT chunk.")
+
+    # Fix 1 (2026-09-09): the IDAT stream was previously handed to
+    # zlib.decompress() with no bound on the size of the decompressed result,
+    # so a small, well-formed PNG whose IDAT expands to an enormous scanline
+    # buffer -- a classic decompression bomb, reachable through any decoded
+    # fingerprint image -- could drive an unbounded allocation. The exact
+    # size of the decompressed scanline data is fully determined by the
+    # already-validated IHDR dimensions: one filter byte plus `width` pixel
+    # bytes per row, `height` rows. Decompression is now capped at exactly
+    # that ceiling and refused if the stream would expand past it, before the
+    # oversized buffer can be materialised.
+    compressed = b"".join(idat_parts)
+    max_raw = height * (width + 1)
+    decompressor = zlib.decompressobj()
     try:
-        raw = zlib.decompress(b"".join(idat_parts))
+        raw = decompressor.decompress(compressed, max_raw)
+        if decompressor.unconsumed_tail:
+            raise PngFormatError(
+                "IDAT stream decompresses to more data than its IHDR "
+                "dimensions allow (possible decompression bomb)."
+            )
+        raw += decompressor.flush()
     except zlib.error as exc:
         raise PngFormatError("IDAT stream failed to decompress.") from exc
+    if len(raw) != max_raw:
+        raise PngFormatError(
+            f"decompressed scanline data is {len(raw)} bytes, "
+            f"expected {max_raw} for a {width}x{height} image."
+        )
     pixels = _unfilter(raw, width, height)
     return {"width": width, "height": height, "pixels": pixels}
 

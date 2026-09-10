@@ -4,6 +4,106 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.3] - 2026-09-09
+
+A security-hardening and bug-fix patch on the **untrusted-input parsing
+surface**. Every biometric enroll/verify run decodes an attacker-influenceable
+file (a PNG fingerprint image, a BRVID clip) *before* any cryptography happens,
+so a malformed or hostile file is the earliest thing that touches this system.
+This release closes a genuine decompression-bomb in the PNG decoder and tightens
+several header-validation and input-bound paths around it. No stored vault,
+identity, keyring, biometric-template, attachment, package, or custody-chain
+format changed. There is no data migration; 1.3.2 data loads unchanged.
+
+### Security
+
+- **`biometrics/codecs/png.py`: the IDAT stream is no longer decompressed
+  without a size ceiling (decompression-bomb fix).** `decode()` previously
+  called `zlib.decompress(b"".join(idat_parts))` with no bound on the size of
+  the decompressed result, so a small, well-formed grayscale PNG whose IDAT
+  expands to an enormous scanline buffer — a classic decompression bomb,
+  reachable through any decoded `--fingerprint` image — could drive an
+  unbounded allocation on the machine doing enrollment or verification. The
+  exact size of the decompressed scanline data is fully determined by the
+  already-validated IHDR dimensions (one filter byte plus `width` pixel bytes
+  per row, `height` rows), so decompression is now performed through
+  `zlib.decompressobj()` capped at exactly that ceiling and **refused** if the
+  stream would expand past it, before the oversized buffer can be
+  materialised. A valid image's real, header-declared scanline data still
+  round-trips byte-for-byte. Regression test:
+  `biometrics/tests/test_codec_and_dsp_support.py::PngRoundTripTests::test_rejects_decompression_bomb`.
+
+### Fixed
+
+- **`biometrics/codecs/video.py`: `frame_count * width * height` is now bounded
+  before any frame slicing.** `decode()` bounded `frame_count`, `width`, and
+  `height` individually (`MAX_FRAME_COUNT`, `MAX_DIMENSION`) but not their
+  *product*, so a header sitting at each individual maximum implied a body far
+  larger than any real clip. A new `MAX_BODY_BYTES` ceiling is checked against
+  `frame_count * width * height` up front, so a corrupt-but-individually-valid
+  header is refused based on the header alone, before the body length check.
+  Regression test:
+  `biometrics/tests/test_video_support.py::VideoCodecTests::test_rejects_body_over_ceiling_before_slicing`.
+
+- **`biometrics/codecs/image_tools.py`: `block_grid_means()` no longer returns a
+  silently wrong result for a `grid_size` larger than the image.** When
+  `grid_size` exceeded `width` or `height`, `_partition()` produced
+  zero-width/zero-height blocks whose `count` was `0`, and the
+  `total / count if count else 0.0` guard quietly substituted `0.0` — yielding a
+  feature vector that looked valid but was meaningless. `block_grid_means()` now
+  rejects a `grid_size` larger than either dimension with an `ImageToolsError`,
+  so a misconfigured extractor fails loudly instead of producing a degenerate
+  template. Regression test:
+  `test_codec_and_dsp_support.py::ImageToolsTests::test_block_grid_means_rejects_oversized_grid`.
+
+- **`vault/app.py`: `encrypt-paths --chunk-mb` is now bounded so a caller cannot
+  request a chunk size at or above BSR2's single-envelope limit.** The chunk
+  size was passed straight through to `BulkFileService` with no upper bound; a
+  value of 16 or more produces chunks that BSR2's envelope refuses to seal
+  (`MAX_PLAINTEXT_BYTES` ≈ 16 MiB), failing the whole operation partway through
+  with a confusing envelope error rather than a clear argument error.
+  `--chunk-mb` is now validated to `1..15` (new `MAX_CHUNK_MB`) and rejected
+  with a plain message otherwise, before any work is done.
+
+- **`biometrics/reports/report_writer.py`: report filenames now use
+  microsecond precision.** `_report_filename()` derived its name from a
+  second-precision `utc_now_iso()` plus a 4-byte random suffix, so two events in
+  the same second sorted only by that random suffix. It now uses the
+  filename-safe `common.timestamps.microsecond_timestamp()`, so a burst of
+  enroll/verify events sorts deterministically oldest-first in `list_reports()`,
+  matching the ordering guarantee its docstring already states. The random
+  suffix is retained.
+
+### Added
+
+- **`biometrics/tests/test_codec_and_dsp_support.py`**: new regression cases for
+  the PNG decompression-bomb ceiling (a small PNG whose IDAT would inflate past
+  its own IHDR dimensions is rejected) and the oversized-`grid_size`
+  `ImageToolsError`.
+- **`biometrics/tests/test_video_support.py`**: new regression case for the
+  BRVID `frame_count * width * height` body-size ceiling.
+
+### Notes
+
+- This is parsing-layer and input-validation hardening only. It does **not**
+  change, and does not claim to strengthen, BSR2's own cryptography — every
+  wrapped master key and sealed payload is exactly as protected by BSR2 as it
+  was in 1.3.2. The standing 1.3.2 caveats still apply in full: BSR2 is
+  unreviewed research cryptography (see `docs/BSR2_INTEGRATION.md`), the package
+  custody chain is tamper-evident rather than a digital signature, the video
+  liveness gate is a motion-presence check rather than general anti-spoofing
+  (KI-001), and losing both a vault's passphrase and its recovery code is
+  unrecoverable by design.
+
+- No stored format changed and no shipped module's cryptographic behavior
+  changed; the fixes are confined to how malformed or hostile *input* is
+  detected and refused at the earliest possible boundary.
+
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.3.2] - 2026-09-08
 
 A security-hardening patch closing a doc/code mismatch: `docs/BSR2_INTEGRATION.md`
@@ -43,6 +143,7 @@ custody-chain format changed. There is no data migration.
   force `SENSITIVE_FILE_MODE` onto ordinary writes) and `warn_if_permissive`
   (flags an overly-open file, stays silent for a correctly-restricted or
   missing one). Skipped on Windows.
+
 - `vault/tests/test_sealed_vault.py`: new `VaultFilePermissionTests` class
   confirming `VaultService.create` writes `vault.json` at 0600, and that a
   subsequent `upsert` re-applies 0600 even if the file was widened by hand in
@@ -53,6 +154,7 @@ custody-chain format changed. There is no data migration.
 - No stored format changed and no shipped module's cryptographic behavior
   changed; 1.3.1 vaults, identities, keyrings, templates, and packages load
   unchanged.
+
 - This is filesystem-permission hardening only. It does not change, and does
   not claim to strengthen, BSR2's own encryption -- the wrapped master key
   inside these files is exactly as protected by BSR2 as it was in 1.3.1. The
@@ -60,6 +162,7 @@ custody-chain format changed. There is no data migration.
   custody chain is tamper-evident rather than a digital signature, losing
   both a vault's passphrase and recovery code is unrecoverable by design)
   are unchanged and still apply.
+
 - On Windows (this project's primary development platform per `version.py`'s
   own git history), this patch is a no-op by design; protecting these files
   there is a filesystem/ACL concern outside what `os.chmod` can portably
@@ -74,12 +177,14 @@ keyring, biometric-template, attachment, package, or custody-chain format
 changed. There is no data migration.
 
 ### Added
+
 - **`docs/SECURITY.md`**: new file. Describes how to report a security
   vulnerability privately (GitHub Private Vulnerability Reporting preferred,
   direct maintainer contact as fallback), response-time expectations, in-scope
   vs. out-of-scope components (`vendor/` is out of scope but still forwarded
   upstream), and restates the standing BSR2 research-cryptography caveat from
   `docs/BSR2_INTEGRATION.md` without softening it.
+
 - **`docs/KNOWN_ISSUES.md`**: new file. Tracks open, non-trivial issues using
   a standardized bug-report template (Reported date / Severity / Environment /
   Component / Steps to Reproduce / Expected behavior / Actual behavior /
@@ -88,11 +193,13 @@ changed. There is no data migration.
   coverage gap, now partially resolved by this release's new `gui/tests/`),
   and KI-003 (bulk file/folder/drive encryption's ~1.4 KB/s throughput
   ceiling, a documented BSR2 limitation rather than a defect).
+
 - **`tools/envinfo.py`**: new standalone diagnostic script. Prints OS,
   machine/processor architecture, Python version/architecture, and Tcl/Tk
   version in one block, meant to be pasted directly into a `KNOWN_ISSUES.md`
   bug report's Environment field. Reads only OS/Python/Tk metadata; never
   modifies anything or sends data anywhere.
+
 - **`gui/tests/test_constants.py`**: new regression tests for
   `gui.core.constants._find_repo_root()`, the repo-root bootstrap walk every
   other `gui` module depends on at import time. Covers finding the root when
@@ -100,11 +207,13 @@ changed. There is no data migration.
   anywhere in the chain (graceful fallback rather than a crash), and when
   multiple `version.py` files exist at different levels (nearest one wins).
   Also covers `APP_TITLE`, `_MODALITY_FILETYPES`, and `_Cancelled`.
+
 - **`gui/tests/test_busy.py`**: new regression tests for
   `gui.core.busy.run_in_background` and `BusyDialog` — the background-
   thread/queue contract every slow (BSR2 KDF-touching) GUI action goes
   through. Covers the success path, the error path (with and without an
   `on_error` handler), and that `work()` genuinely runs off the main thread.
+
 - **`gui/tests/test_path_panel.py`**: new regression tests for
   `gui.widgets.path_panel.PathSelectionPanel` — the shared file/folder/drive
   picker used by both the Vault "Files / Folders / Drives" sub-tab and the
@@ -112,6 +221,7 @@ changed. There is no data migration.
   behavior, first-seen ordering, and the `on_change` callback.
 
 ### Changed
+
 - **`version.py`**: bumped `__version__` from `1.3.0` to `1.3.1`.
 
 ### Notes
@@ -119,9 +229,11 @@ changed. There is no data migration.
   real on a machine with a working Tk display (any normal desktop) and skip
   cleanly on a headless CI runner with no display, consistent with how GUI
   tests are conventionally handled when CI doesn't provision a display.
+
 - `gui/tabs/*.py` (the actual Vault/Biometrics/Packages tab wiring) still has
   no direct test coverage; this remains open as the "Next step" in
   `docs/KNOWN_ISSUES.md`'s KI-002 entry.
+
 - No new external dependencies were introduced.
 
 ---
@@ -138,15 +250,23 @@ restructure. No stored template format changed; existing enrolled video
 templates verify unchanged.
 
 ### Added
+
 - **`biometrics/features/liveness.py`**: new module. `assess_liveness()` measures mean absolute per-pixel frame-to-frame difference across a decoded BRVID clip and reports `is_live` against `DEFAULT_LIVENESS_THRESHOLD` (0.75). A clip built from a single repeated frame, or any clip with genuinely zero motion, scores exactly `0.0` and always fails the gate. **This is a motion-presence check, not general anti-spoofing** — it does not detect a played-back video recording, a physically-wobbled photograph, or a high-quality mask/deepfake with natural micro-motion; see the module's own docstring for the full scope statement.
+
 - **`biometrics/engine/enrollment.py`**: `enroll_modality()`/`enroll_identity()` gained an `allow_static: bool = False` parameter. For the `video` modality only, a static clip is refused at enrollment time by default — mirroring the 0.6.0-beta design ("a photograph cannot be baked into a template and make the verification-time gate meaningless"), re-implemented against the current codebase.
+
 - **`biometrics/engine/verification.py`**: `verify_modality()`/`verify_identity()` gained the same `allow_static` parameter. For the `video` modality only, a static probe is reported as a non-match with a populated `"liveness"` field **before** its similarity score is ever computed, rather than being scored against the stored template. Every other modality's result dict is unaffected and never gains a `"liveness"` key.
+
 - **`biometrics/app.py`**: `enroll` and `verify` both gained a `--allow-static` flag, threaded through to the functions above. `verify`'s console output now prints `LIVENESS_FAILED` (with the measured motion energy and threshold) instead of a similarity score when the gate rejects a video probe.
+
 - **`biometrics/tests/test_liveness.py`**: new regression tests covering zero-motion detection, the enrollment-time refusal and its override, the verification-time non-match-before-scoring behavior, and that non-video modalities are entirely unaffected.
 
 ### Notes
+
 - Backward compatible: no change to any stored record's schema, and no change to any existing CLI flag's meaning. `--allow-static` is new and optional; omitting it preserves the exact enrollment/verification flow for every non-video modality.
+
 - **The default threshold is calibrated only against this project's own synthetic sample generator, not a real camera.** Real-world tuning against actual video captures is unfinished and open-ended — this release delivers the mechanism (a working, tested gate with a documented override), not a validated production threshold.
+
 - No new external dependencies were introduced.
 
 ---
@@ -159,10 +279,15 @@ identity, keyring, biometric-template, attachment, package, or
 custody-chain format changed. There is no data migration.
 
 ### Fixed
+
 - **A same-named standalone file added to a bulk bundle could silently overwrite another file of the same name on restore, with zero error or warning.** `vault/store/bulk_file_service.py`'s and `biometrics/engine/bulk_attachments.py`'s (hand-duplicated, per this project's existing separation between the two tools) `_build_zip_from_paths()` assigned a standalone file's archive entry name as nothing more than its own bare filename (`root_path.name`), with no check against every other archive entry name already written into the same bundle. Selecting two individual files that happen to share a filename — an ordinary thing to do, e.g. two different folders each containing their own `report.pdf` or `notes.txt`, each added to the bundle one at a time via "Add Files..." — silently wrote two zip entries under the identical name. `zipfile` permits this at write time with no error or warning of any kind. On restore, `zipfile.ZipFile.extractall()` extracts entries in archive order, and a later entry with the same name silently overwrites an earlier one already written to disk — so one of the two originally-selected files was permanently and silently dropped from the bundle. The bundle's own reported metadata (`files_bundled` count at encrypt/attach time, `files_restored` count at restore time) continued to claim full success throughout, since both files genuinely were written into and extracted from the archive; only the file actually left on disk afterward was wrong.
+
 ### Changed
+
 - **Every archive entry name (standalone file or walked folder/drive entry) is now tracked as it is written into a bulk bundle.** New `_unique_arcname()` helper (added independently to both `vault/store/bulk_file_service.py` and `biometrics/engine/bulk_attachments.py`) disambiguates a colliding name by inserting `" (2)"`, `" (3)"`, etc. before the file's extension — the same numbering convention a filesystem itself uses when asked to keep two same-named files side by side — so nothing is silently discarded and the disambiguated names remain human-readable after restore.
+
 ### Notes
+
 - Backward compatible: no change to any stored record's schema, any CLI flag's name or meaning, or any function's public signature. Existing bundles created before this fix restore identically to before; the fix only changes how a *new* bundle's internal archive entry names are chosen when a collision would otherwise occur.
 - Verified with two real, same-named files (`report.pdf`) bundled from two different source folders in a single `encrypt-paths`/`attach-paths` call, on both the Vault and Biometrics code paths independently: before the fix, restoring the bundle produced only one `report.pdf` on disk (the other's bytes were gone with no error); after the fix, the restored folder correctly contains both `report.pdf` and `report (2).pdf`, each byte-for-byte identical to its own original source file. A third same-named addition was also verified to correctly become `report (3).pdf` rather than colliding with the already-disambiguated `report (2).pdf`.
 - No new external dependencies were introduced.
@@ -258,17 +383,22 @@ custody-chain format changed. There is no data migration.
 
 - **`app.py`** is now the small root-level GUI entry point. It owns only the main
   window, notebook assembly, menu bar, About dialog, and `main()`.
+
 - **`gui/core/constants.py`** centralizes the application title, biometric
   file-type filters, cancellation sentinel, and repository-root import
   bootstrap. The root is located by walking upward to `version.py` rather than
   assuming a fixed directory depth.
+
 - **`gui/core/busy.py`** centralizes the modal busy dialog and the shared
   background-operation runner used to keep slow KDF and encrypted-data work
   from blocking Tkinter's event loop.
+
 - **`gui/widgets/dialogs.py`** contains reusable modal-dialog helpers instead of
   repeating dialog construction across tabs.
+
 - **`gui/widgets/path_panel.py`** contains the shared file, folder, and drive-root
   selection panel used by bulk Vault and biometric-attachment workflows.
+
 - **`gui/tabs/tab_vault.py`**, **`gui/tabs/tab_biometrics.py`**, and
   **`gui/tabs/tab_packages.py`** now own their respective interfaces.
 
@@ -278,12 +408,15 @@ custody-chain format changed. There is no data migration.
   `gui/app.py` implementation was split by responsibility. The executable shell
   now lives at the repository root as `app.py`, while reusable GUI code lives
   under `gui/core/`, `gui/widgets/`, and `gui/tabs/`.
+
 - **The supported direct GUI launch command is now `python app.py`.** The GUI
   README and root README now document the actual root entry point and current
   file layout.
+
 - **GUI import setup is depth-independent.** Importing
   `gui.core.constants` establishes the repository root before any tab imports
   Vault, Biometrics, or Packages modules.
+
 - **Documentation now matches the split GUI architecture.** `README.md`,
   `gui/README.md`, and `docs/README_FULL_FILE_ENCRYPTION.md` no longer describe
   `gui/app.py` or the deleted drag-and-drop module as current files.
@@ -292,6 +425,7 @@ custody-chain format changed. There is no data migration.
 
 - **`gui/app.py`** was removed after its responsibilities were divided between
   the root `app.py` shell and the new GUI submodules.
+
 - **`gui/windows_dnd.py`** was removed. The 1.2.0 interface uses the shared
   Tkinter path-selection panel and standard picker dialogs.
 
@@ -300,9 +434,12 @@ custody-chain format changed. There is no data migration.
 - The split is architectural. GUI actions still call the existing Vault,
   Biometrics, and Packages application layers; cryptography, validation,
   persistence, and identity policy were not reimplemented in the interface.
+
 - The project remains standard-library only and does not add a GUI dependency.
+
 - The 1.1.1 vendored-BSR2 digest-pin fix and the 1.1.0 biometric similarity fix
   remain unchanged.
+
 - Existing security caveats remain in effect: BSR2 is unreviewed research
   cryptography, the package custody chain is tamper-evident rather than a
   digital signature, and losing both a vault passphrase and recovery code is
@@ -330,6 +467,7 @@ changed, and there is nothing to migrate. With this release the full suite
   **no** line-ending conversion, so it compares directly against the raw-byte
   pins. As stated in 1.1.0, the pins themselves were always correct — they are
   unchanged; only the test's hashing was wrong.
+
 - **`run_tests.py` and `test_bsr2_vendor_integrity.py` now resolve the
   repository root robustly.** Both locate the root by walking up to the
   directory that contains both `version.py` and `vendor/`, rather than assuming
@@ -337,6 +475,7 @@ changed, and there is nothing to migrate. With this release the full suite
   correct now that all three root-level test files live under `tests/`, and
   removes the fixed-path fragility that caused the 1.0.3 "vendored BSR2
   directory is missing" class of error.
+
 - **CI workflow invoked the runner at its old path.** `.github/workflows/tests.yml`
   called `python run_tests.py` in the `fast` and `slow` jobs, but the runner
   moved to `tests/` in 1.1.0, so both jobs would fail at the first step. Both now
@@ -358,6 +497,7 @@ changed, and there is nothing to migrate. With this release the full suite
 - The 1.1.0 biometric similarity fix, the `tests/` reorganization, and the
   removal of ruff are all unchanged and remain in effect; this release only
   closes the pin defect and aligns CI and docs with the shipped layout.
+
 - The security caveats are unchanged and still apply: BSR2 is unreviewed
   research crypto, the package custody chain is tamper-evident rather than a
   digital signature, and losing both a vault's passphrase and recovery code is
@@ -420,6 +560,7 @@ similarity scoring described below.
   `distance_similarity()`. Feature extraction itself is unchanged; only the
   similarity/scoring step changed.
 - **Test suite reorganized under `tests/`.** `run_tests.py`,
+
   `test_bsr2_vendor_integrity.py`, and `test_cli_dispatcher.py` moved from the
   repository root into `tests/`, alongside every other tool's `tests/`
   directory, for a more consistent layout. `run_tests.py`'s discovery logic
@@ -455,9 +596,11 @@ similarity scoring described below.
 - No enrolled template's stored bytes changed and no re-enrollment is
   required; the biometrics fix applies at verification time against
   templates exactly as they were already stored.
+
 - If you have any automation or tests that assert a specific non-1.0
   similarity score for fingerprint/voice/video, those expected values will
   need updating to reflect the new distance-based scoring.
+
 - The 1.0.3.1 security caveats are unchanged and still apply: BSR2 is
   unreviewed research crypto, the package custody chain is tamper-evident
   rather than a digital signature, and losing both a vault's passphrase and
@@ -493,9 +636,11 @@ instead of erroring on a wrong path.
 
 - No stored format changed and no shipped module's behavior changed; 1.0.2 data
   loads unchanged and there is nothing to migrate.
+
 - This was purely a test-path arithmetic bug: the vendored files, their pinned
   digests, and the test's comparison logic were all correct. Only the directory
   the test looked in was wrong.
+
 - The 1.0.1 security caveats are unchanged and still apply: BSR2 is unreviewed
   research crypto, the package custody chain is tamper-evident rather than a
   digital signature, and losing both a vault's passphrase and recovery code is
@@ -522,6 +667,7 @@ format changed and no data migration is required.
   keyring-touching biometrics step now pipes its passphrase in on stdin, the
   same pattern the vault steps already used. `make-samples`/`list`/`inspect`/
   `delete` do not touch the keyring and need no passphrase.
+
 - **Wrong exception type asserted in `crypto/tests/test_rng.py`.** Two tests
   asserted `generate(0, ...)` and `generate(32, b"")` raise
   `Bsr2IntegrationError`, but `crypto/rng.py` does not wrap the vendored
@@ -540,6 +686,7 @@ format changed and no data migration is required.
   with the repository root as `top_level_dir`, adds the two root-level test
   modules by name, and **fails loudly on a collection import error instead of
   passing with zero tests**. New flags:
+
   - `python run_tests.py` — every test.
   - `python run_tests.py --fast` — everything except the real-KDF tests.
   - `python run_tests.py --slow` — only the real-KDF tests.
@@ -547,6 +694,7 @@ format changed and no data migration is required.
   Fast/slow is filtered at the **class** level, so a module holding both fast
   and slow classes (`test_keyring`, `test_factors`,
   `test_label_normalization`) still runs its fast classes under `--fast`.
+
 - **CI workflow split into `fast` and `slow` jobs.** The ~75 real-BSR2-KDF
   derivations (`test_sealed_vault`, `test_file_records`, `test_batch_upsert`,
   `KeyringUnlockTests`, `FactorHashKdfRoundTripTests`) previously ran on **every**
@@ -555,6 +703,7 @@ format changed and no data migration is required.
   full non-KDF suite across 3.10–3.13, and a separate `slow` job runs the
   real-KDF tests **once** on 3.12. Every test still runs on every push; the
   cost is just no longer paid four times over.
+
 - **`pyproject.toml` trimmed to a ruff-only config.** This project is cloned
   and run in place (`python cli.py`, `python run_tests.py`) and is never built
   as a wheel or published, so the `[project]` metadata table was dead config
@@ -570,8 +719,10 @@ format changed and no data migration is required.
 
 - No stored format changed and no shipped module's behavior changed; 1.0.1 data
   loads unchanged and there is nothing to migrate.
+
 - The version bump exists to record the CI/tooling fixes; the application code,
   stored formats, and BSR2 construction are identical to 1.0.1.
+
 - The 1.0.1 security caveats are unchanged and still apply: BSR2 is unreviewed
   research crypto, the package custody chain is tamper-evident rather than a
   digital signature, and losing both a vault's passphrase and recovery code is
@@ -596,16 +747,20 @@ is required.
   contexts), uniform authentication failure on modified ciphertext / wrong key
   / wrong context, and the `MAX_PAYLOAD_BYTES` refusal. Uses a random 32-byte
   master key, so it exercises real BSR2 sealing without paying the KDF cost.
+
 - `crypto/tests/test_keyring.py` — malformed-state rejection, the iteration
   floor **and** ceiling (0.8.0-beta), recovery-code formatting, and a small
   real-KDF unlock round trip (passphrase and recovery code).
+
 - `crypto/tests/test_factors.py` — keyed-MAC bind/verify (fast), parse-time
   rejection of out-of-range iteration counts without running the KDF, plus one
   real-KDF hash/verify round trip.
+
 - `crypto/tests/test_throttle.py` — regression coverage for the 0.8.0-beta
   corrupt-state hardening: `NaN`/`Infinity`/negative fields are discarded, a
   `NaN` `locked_until` no longer silently unlocks, and an astronomical
   `failed_attempts` no longer builds a giant integer.
+
 - `crypto/tests/test_context.py` and `crypto/tests/test_rng.py` — context-string
   construction/rejection and DRBG output-length/independence checks.
 
@@ -613,14 +768,18 @@ is required.
 - `common/tests/test_common_utils.py` — atomic writes, hashing, and the
   timestamp helpers, including an explicit check that the `utc_now_iso` alias
   exists (its absence was the 1.0.0 import crash).
+
 - `vault/tests/` — `test_record_model.py`, `test_record_ids_and_time.py` (the
   0.4.0 shared-timestamp rule), and `test_audit_log.py`.
+
 - `biometrics/tests/` — `test_bulk_attachments.py` (multi-chunk + mixed
   file/folder bundling, missing-chunk detection), `test_device_key.py`, and
   `test_report_writer.py`.
+
 - `packages/tests/` — `test_custody_chain.py` (including the 0.8.2-beta
   non-list `CustodyError`), `test_identity.py`, `test_package_audit.py`, and
   `test_verification.py`.
+
 - `tests/test_cli_dispatcher.py` — the `cli.py` dispatch table, including that
   every documented tool (`biometrics`, `vault`, `package`, `gui`, `version`,
   `help`) is reachable.
@@ -637,10 +796,12 @@ is required.
 
 - No stored format changed and no shipped module's behavior changed; 1.0.0 data
   loads unchanged and there is nothing to migrate.
+
 - Most new tests use injected 32-byte keys or envelope-shaped fixtures so they
   run fast; the real-KDF round trips are isolated into their own test classes
   and are slow by design (~85 s per derivation), consistent with the existing
   sealed-vault and package suites.
+
 - The 1.0.0 security caveats are unchanged and still apply: BSR2 is unreviewed
   research crypto, the package custody chain is tamper-evident rather than a
   digital signature, and losing both a vault's passphrase and recovery code is
@@ -674,17 +835,21 @@ written by `0.8.2-beta` load unchanged. There is nothing to migrate.
   (`vault.store.vault_service.VaultService`,
   `biometrics.engine.enrollment`/`verification`, `packages.package`); no crypto,
   validation, or persistence logic is duplicated in the GUI.
+
   - **Vault tab**: choose/init/unlock/lock a vault, list records (works while
     locked), create records via a JSON payload editor, view/decrypt or delete a
     record, **plus** a new "Files / Folders / Drives" sub-tab for bulk
     encryption of any size.
+
   - **Biometrics tab**: create/unlock the keyring, enroll against
     voice/fingerprint/video files, verify a probe with an "any modality matches"
     option, inspect, delete, generate synthetic samples, **plus** a new "File
     Attachments" sub-tab.
+
   - **Packages tab**: create a package, add/remove recipients, open as a
     recipient, verify and display the custody chain, and run the same demo cycle
     as `packages/main.py demo`.
+
   - Every KDF-touching operation runs on a background thread behind a modal
     "Working..." progress dialog, so the window never appears frozen during a
     derivation that can take tens of seconds to minutes.
@@ -695,14 +860,18 @@ written by `0.8.2-beta` load unchanged. There is nothing to migrate.
   `restore_paths()` to zip any mix of files, folders, and drive roots into one
   bundle (preserving relative structure) before chunking past BSR2's ~16 MiB
   single-envelope limit. Reassembly verifies a whole-content SHA-256.
+
 - **`biometrics/engine/bulk_attachments.py`** — the same chunking/bundling
   logic, biometrics-side, storing chunks as ordinary attachments plus a manifest.
+
 - **`biometrics/engine/attachments.py`** — attach an arbitrary raw file (any
   extension, or none) to an identity, sealed under the same master key,
   byte-for-byte recoverable.
+
 - **`vault/store/vault_service.py`** — new `upsert_file` / `upsert_file_bytes` /
   `get_file` / `get_file_bytes` methods to seal arbitrary raw bytes as a vault
   record (never parsed as JSON), with plaintext filename/size/SHA-256 metadata.
+
 - **`docs/README_FULL_FILE_ENCRYPTION.md`** — documents the feature and its
   honest real-world throughput ceiling (BSR2 is ~1.4 KB/s in pure Python).
 
@@ -713,9 +882,12 @@ written by `0.8.2-beta` load unchanged. There is nothing to migrate.
 **Shared utility layer (`common/`)**
 - **`common/atomic_io.py`** — the single canonical `atomic_write_text` /
   `atomic_write_json`, replacing three near-identical write-then-rename copies.
+
 - **`common/hashing.py`** — canonical `sha256_bytes` / `sha256_file`, replacing
   five pasted copies.
+
 - **`common/timestamps.py`** — canonical UTC timestamp helpers.
+
 - **`common/README.md`**.
 
 **Other new files**
