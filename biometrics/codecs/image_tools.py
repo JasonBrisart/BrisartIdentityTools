@@ -27,6 +27,24 @@ def _check_image(width: int, height: int, pixels: bytes) -> None:
         )
 
 
+def _check_target(target_width: int, target_height: int) -> None:
+    """Validate a requested output size for a resize/crop.
+
+    Fix 2 (2026-09-11): bound target dimensions against MAX_DIMENSION, not
+    just >= 1. _check_image() already refuses a SOURCE image larger than
+    MAX_DIMENSION, but resize_nearest()/crop_center() previously validated
+    only that their TARGET dimensions were >= 1 -- so an out-of-range target
+    would allocate target_width * target_height bytes with no ceiling. Not
+    reachable from today's fixed-constant callers (fingerprint/template paths
+    pass 64/128), but a shared image utility should refuse an out-of-range
+    target exactly as it refuses an out-of-range source.
+    """
+    if target_width < MIN_DIMENSION or target_height < MIN_DIMENSION:
+        raise ImageToolsError("target dimensions must be at least 1.")
+    if target_width > MAX_DIMENSION or target_height > MAX_DIMENSION:
+        raise ImageToolsError("target width or height exceeds the supported maximum.")
+
+
 def crop_center(width: int, height: int, pixels: bytes, target_width: int, target_height: int) -> tuple:
     """Crop the centered ``target_width x target_height`` region.
 
@@ -34,8 +52,7 @@ def crop_center(width: int, height: int, pixels: bytes, target_width: int, targe
     first padded with black (0) pixels so the crop never reads out of bounds.
     """
     _check_image(width, height, pixels)
-    if target_width < MIN_DIMENSION or target_height < MIN_DIMENSION:
-        raise ImageToolsError("target dimensions must be at least 1.")
+    _check_target(target_width, target_height)
     pad_width = max(width, target_width)
     pad_height = max(height, target_height)
     if pad_width != width or pad_height != height:
@@ -72,8 +89,7 @@ def resize_nearest(width: int, height: int, pixels: bytes, target_width: int, ta
     differences across platforms.
     """
     _check_image(width, height, pixels)
-    if target_width < MIN_DIMENSION or target_height < MIN_DIMENSION:
-        raise ImageToolsError("target dimensions must be at least 1.")
+    _check_target(target_width, target_height)
     out = bytearray(target_width * target_height)
     for target_row in range(target_height):
         source_row = min(height - 1, (target_row * height) // target_height)

@@ -13,6 +13,14 @@ import wave
 SUPPORTED_SAMPLE_WIDTHS = (1, 2, 4)  # bytes per sample: 8, 16, 32-bit PCM
 MAX_DURATION_SECONDS = 600  # guards against an absurd allocation from a
 # corrupt or hostile header claiming an enormous frame count.
+MAX_SAMPLE_RATE = 768_000  # ceiling on a declared sample rate. Real PCM tops
+# out around 384 kHz even for extreme professional audio; 768 kHz leaves
+# generous headroom while stopping a hostile header from declaring an
+# astronomically large rate. frame_count is bounded RELATIVE to sample_rate
+# (see MAX_DURATION_SECONDS above), so an unbounded sample_rate would let a
+# corrupt/hostile header neutralize that frame-count guard entirely -- the
+# same "individually-valid field, unbounded target" class fixed for the
+# BRVID container and the PNG IDAT stream in 1.3.3.
 
 
 class WaveFormatError(ValueError):
@@ -62,6 +70,17 @@ def read_wave(path) -> dict:
                 )
             if sample_rate <= 0:
                 raise WaveFormatError("sample rate must be positive.")
+            # Fix 1 (2026-09-11): bound the declared sample rate BEFORE the
+            # duration guard below. frame_count is only ever checked relative
+            # to sample_rate, so a hostile header declaring an astronomically
+            # large rate could push the MAX_DURATION_SECONDS ceiling
+            # arbitrarily high and read an enormous frame body. A legitimate
+            # recording's real rate is far under this cap.
+            if sample_rate > MAX_SAMPLE_RATE:
+                raise WaveFormatError(
+                    f"sample rate {sample_rate} exceeds the supported "
+                    f"maximum of {MAX_SAMPLE_RATE}."
+                )
             if frame_count > sample_rate * MAX_DURATION_SECONDS:
                 raise WaveFormatError(
                     f"audio exceeds the supported {MAX_DURATION_SECONDS}s maximum."
@@ -83,6 +102,11 @@ def write_wave(path, sample_rate: int, samples: list, sample_width: int = 2) -> 
     """Write a mono ``int`` sample stream as a 16-bit (default) PCM WAV file."""
     if sample_rate <= 0:
         raise WaveFormatError("sample rate must be positive.")
+    if sample_rate > MAX_SAMPLE_RATE:
+        raise WaveFormatError(
+            f"sample rate {sample_rate} exceeds the supported "
+            f"maximum of {MAX_SAMPLE_RATE}."
+        )
     if sample_width not in SUPPORTED_SAMPLE_WIDTHS:
         raise WaveFormatError(f"unsupported sample width: {sample_width} bytes.")
     if sample_width == 1:
