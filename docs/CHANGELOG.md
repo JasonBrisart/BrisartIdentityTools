@@ -4,6 +4,66 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.5] - 2026-09-10
+
+A small, targeted patch closing the same filename-ordering bug fixed in
+1.3.3 (`biometrics/reports/report_writer.py`) and 1.3.4
+(`vault/reports/audit_log.py`) — this time in the third and last sibling
+audit-log module, `packages/audit.py`. No stored vault, identity, keyring,
+biometric-template, attachment, package, or custody-chain format changed.
+There is no data migration.
+
+### Fixed
+
+- **`packages/audit.py`: package audit entry filenames now use
+  microsecond-precision timestamps, matching the identical fix already
+  applied to `biometrics/reports/report_writer.py` in 1.3.3 and
+  `vault/reports/audit_log.py` in 1.3.4.** `_entry_filename()` previously
+  derived its name from `utc_now_iso().replace(":", "").replace("+", "Z")` —
+  a hand-mangled, second-precision timestamp that didn't even go through the
+  shared `common.timestamps.filename_timestamp()` helper — plus a 4-byte
+  random suffix. Two package audit events recorded in the same second sorted
+  only by that random suffix, so `list_entries()`'s documented oldest-first
+  ordering guarantee did not actually hold for same-second events. This is
+  more than a theoretical risk for this module specifically:
+  `packages.package`'s `create_package`/`add_recipient`/`open_package`
+  functions each call `audit.record_event()`, and `packages/main.py`'s own
+  `demo` command runs a full create → add-recipient → open cycle in one
+  process invocation — three real audit events that routinely land in the
+  same wall-clock second. `_entry_filename()` now uses the filename-safe
+  `common.timestamps.microsecond_timestamp()`, so a burst of package audit
+  events sorts deterministically oldest-first, matching the ordering
+  `vault.reports.audit_log.list_entries()` and
+  `biometrics.reports.report_writer.list_reports()` already provide. The
+  random suffix is retained. Regression tests:
+  `packages/tests/test_package_audit.py::PackageAuditTests::test_entry_filename_uses_microsecond_precision`
+  and
+  `packages/tests/test_package_audit.py::PackageAuditTests::test_rapid_successive_events_sort_oldest_first_by_filename`.
+
+### Notes
+
+- This closes out the bug class across all three sibling audit/report-log
+  modules in the repository (`biometrics/reports/report_writer.py`,
+  `vault/reports/audit_log.py`, `packages/audit.py`); no other module in the
+  codebase constructs a chronologically-sortable filename from a timestamp.
+- This is a filename-formatting fix confined to the external package audit
+  log. It does not change, and does not claim to strengthen, the in-package
+  custody chain (`packages/custody.py`), BSR2's own cryptography, or any
+  stored package/vault/identity format — every wrapped content key, key
+  slot, and sealed payload is exactly as protected as it was in 1.3.4. The
+  standing 1.3.4 caveats still apply in full: BSR2 is unreviewed research
+  cryptography (see `docs/BSR2_INTEGRATION.md`), the package custody chain
+  is tamper-evident rather than a digital signature, and the video liveness
+  gate remains a motion-presence check rather than general anti-spoofing
+  (KI-001).
+- No stored format changed and no shipped module's cryptographic behavior
+  changed; 1.3.4 vaults, identities, keyrings, templates, and packages load
+  unchanged.
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.3.4] - 2026-09-10
 
 A small, targeted patch closing a filename-ordering inconsistency between the
