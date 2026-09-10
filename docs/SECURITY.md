@@ -87,10 +87,51 @@ code actually does are especially welcome.
 
 ## Supported Versions
 
-Only the latest released version on the `main` branch receives security
-fixes. There is no long-term-support branch at this time.
+BrisartIdentityTools is maintained as two parallel release lines so that
+institutions can choose between long-term stability and access to the latest
+capabilities.
 
-| Version | Supported |
-| --- | --- |
-| 1.3.x (latest) | ✅ |
-| < 1.3.0 | ❌ |
+- **Long-Term Support (LTS).** A feature-frozen, pure-Python, dependency-free
+  generation intended for offline and air-gapped research environments. An LTS
+  release receives security, critical correctness, and data-integrity fixes for
+  the duration of its published support window. No new features, no hardware or
+  device integration, and no third-party dependencies are introduced into an LTS
+  line for the life of that line. This purity is a deliberate, maintained
+  guarantee, not an incidental property of a given release.
+
+- **Current (`main`).** The active development line, where new functionality —
+  including hardware and device support that may require platform drivers or
+  optional dependencies — is delivered. The Current line is not covered by the
+  LTS dependency-free guarantee.
+
+The following releases receive security fixes:
+
+| Release | Line | Support status | Security fixes |
+| --- | --- | --- | --- |
+| LTS-2028 (1.3.x) | Long-Term Support | Supported through 1 January 2028 | ✅ |
+| Latest release on `main` | Current | Supported | ✅ |
+| Pre-1.3.0 and superseded releases | — | End of Support | ❌ |
+
+### Lifecycle
+
+An LTS release is feature-locked at publication and maintained on a
+security-and-correctness basis only for its published window. Fixes are applied
+where they can be made safely without altering the frozen architecture; where a
+defect cannot be remediated within that architecture, migration to a currently
+supported release may be required and will be documented.
+
+On reaching its published end-of-support date, an LTS release enters
+**End of Support**. It remains permanently available as a historical,
+dependency-free reference — supporting reproducibility, archival, and prior
+validation records — but receives no further maintenance, including security
+updates. Availability of a release should not be interpreted as continued
+support; institutions requiring ongoing maintenance should adopt the next LTS
+release or a currently supported version.
+
+### Scope and assurances
+
+This policy governs maintenance commitments only. It does not modify the
+underlying cryptographic caveats described in
+[`BSR2_INTEGRATION.md`](BSR2_INTEGRATION.md): BSR2 remains unreviewed research
+cryptography and should not be relied upon as the sole protection for
+high-value or irreplaceable secrets, in any release line.
