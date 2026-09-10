@@ -4,6 +4,55 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.4] - 2026-09-10
+
+A small, targeted patch closing a filename-ordering inconsistency between the
+Vault and Biometrics audit trails. No stored vault, identity, keyring,
+biometric-template, attachment, package, or custody-chain format changed.
+There is no data migration.
+
+### Fixed
+
+- **`vault/reports/audit_log.py`: audit entry filenames now use
+  microsecond-precision timestamps, matching the identical fix already
+  applied to `biometrics/reports/report_writer.py` in 1.3.3.** `_entry_filename()`
+  derived its name from a second-precision `utc_now_iso()` plus a 4-byte
+  random suffix, so two vault audit events recorded in the same second (a
+  batch upsert, or several records created back-to-back) sorted only by that
+  random suffix — `list_entries()`'s documented oldest-first ordering
+  guarantee did not actually hold for same-second events, even though the
+  identical class of bug had already been fixed on the biometrics side in
+  1.3.3 (`f78cade801`, "Harden parsing of untrusted biometric inputs" cycle).
+  `_entry_filename()` now uses the filename-safe
+  `common.timestamps.microsecond_timestamp()`, so a burst of vault events
+  sorts deterministically oldest-first, matching the ordering
+  `biometrics.reports.report_writer.list_reports()` already provides. The
+  random suffix is retained. Regression tests:
+  `vault/tests/test_audit_log.py::VaultAuditLogTests::test_entry_filename_uses_microsecond_precision`
+  and
+  `vault/tests/test_audit_log.py::VaultAuditLogTests::test_rapid_successive_events_sort_oldest_first_by_filename`.
+
+### Notes
+
+- This is a filename-formatting fix confined to the audit-log layer. It does
+  not change, and does not claim to strengthen, BSR2's own cryptography, the
+  vault record schema, or any stored payload — every wrapped master key and
+  sealed record is exactly as protected as it was in 1.3.3. The standing
+  1.3.3 caveats still apply in full: BSR2 is unreviewed research cryptography
+  (see `docs/BSR2_INTEGRATION.md`), the video liveness gate is a
+  motion-presence check rather than general anti-spoofing (KI-001), and the
+  bulk file/folder/drive throughput ceiling remains an inherent property of
+  pure-Python BSR2 (KI-003).
+
+- No stored format changed and no shipped module's cryptographic behavior
+  changed; 1.3.3 vaults, identities, keyrings, templates, and packages load
+  unchanged.
+  
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.3.3] - 2026-09-09
 
 A security-hardening and bug-fix patch on the **untrusted-input parsing
