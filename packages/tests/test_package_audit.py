@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+
 from packages import audit
 from packages.audit import PackageAuditError
 
@@ -52,6 +53,33 @@ class PackageAuditTests(unittest.TestCase):
     def test_open_denied_and_custody_violation_are_valid_actions(self):
         audit.build_entry("open_denied", "pkg-1")
         audit.build_entry("custody_violation_detected", "pkg-1")
+
+    # --- Fix 1 (2026-09-10) regression coverage -----------------------
+    def test_entry_filename_uses_microsecond_precision(self):
+        # Mirrors vault/tests/test_audit_log.py's identical regression test
+        # for the same bug class: the filename must embed a
+        # microsecond-precision stamp, not the old
+        # utc_now_iso().replace(":", "").replace("+", "Z") construction,
+        # so same-second events remain distinguishable by timestamp alone
+        # (before the random suffix is even considered).
+        path = audit.record_event(self.audit_dir, "created", "pkg-1", "Alice")
+        self.assertRegex(
+            path.name, r"^\d{8}_\d{6}_\d{6}Z_created_pkg-1_[0-9a-f]{8}\.json$"
+        )
+
+    def test_rapid_successive_events_sort_oldest_first_by_filename(self):
+        # Before this fix, several audit events written in the same
+        # wall-clock second -- exactly what packages.main's "demo" command,
+        # or any real create -> add-recipient -> open workflow, produces --
+        # sorted only by their random suffix, so list_entries()'s own
+        # oldest-first ordering guarantee did not actually hold.
+        paths = [
+            audit.record_event(self.audit_dir, "created", f"pkg-{i}", f"Actor {i}")
+            for i in range(20)
+        ]
+        listed = audit.list_entries(self.audit_dir)
+        self.assertEqual([p.name for p in listed], sorted(p.name for p in paths))
+        self.assertEqual(listed, paths)
 
 
 if __name__ == "__main__":
