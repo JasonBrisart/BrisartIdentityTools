@@ -55,6 +55,21 @@ class VideoCodecTests(unittest.TestCase):
             self.assertEqual(info["frame_count"], 1)
             self.assertTrue(info["size_matches_header"])
 
+    def test_probe_rejects_body_over_ceiling(self):
+        # Fix 2 (2026-09-11): probe() must apply the same
+        # frame_count * width * height ceiling decode() already enforces, so
+        # a header whose fields are each individually valid but whose
+        # product is absurd is refused from the header alone.
+        header = video.HEADER_STRUCT.pack(
+            video.MAGIC, video.MAX_DIMENSION, video.MAX_DIMENSION,
+            video.MAX_FRAME_COUNT, 5,
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "hostile.brvid"
+            path.write_bytes(header)
+            with self.assertRaises(video.VideoFormatError):
+                video.probe(path)
+
 
 class VideoFeatureTests(unittest.TestCase):
     def test_extract_from_frames_returns_fixed_length_vector(self):

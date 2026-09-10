@@ -1,8 +1,11 @@
 """Round-trip and correctness tests for biometrics.codecs.*"""
+import tempfile
 import unittest
+import wave as _stdlib_wave
 import zlib
+from pathlib import Path
 
-from biometrics.codecs import dsp, image_tools, pgm, png
+from biometrics.codecs import dsp, image_tools, pgm, png, wave_tools
 
 
 class PgmRoundTripTests(unittest.TestCase):
@@ -55,6 +58,7 @@ class PngRoundTripTests(unittest.TestCase):
         # to far more than the 1*(1+1)=2 scanline bytes those dimensions allow
         # must be refused as a decompression bomb, not decompressed whole.
         import struct
+
         ihdr = struct.pack(">IIBBBBB", 1, 1, png.BIT_DEPTH, png.COLOR_TYPE_GRAYSCALE, 0, 0, 0)
         bomb_idat = zlib.compress(b"\x00" * 100_000)
         crafted = (
@@ -124,6 +128,21 @@ class ImageToolsTests(unittest.TestCase):
         magnitudes = image_tools.sobel_gradient_magnitude(width, height, pixels)
         self.assertTrue(all(value == 0.0 for value in magnitudes))
 
+    def test_rejects_oversized_target_dimensions(self):
+        # Fix 2 (2026-09-11): a target larger than MAX_DIMENSION must be
+        # refused by both resize and crop, the same way an oversized source
+        # already is.
+        pixels = bytes([50] * (4 * 4))
+        with self.assertRaises(image_tools.ImageToolsError):
+            image_tools.resize_nearest(4, 4, pixels, image_tools.MAX_DIMENSION + 1, 4)
+        with self.assertRaises(image_tools.ImageToolsError):
+            image_tools.crop_center(4, 4, pixels, 4, image_tools.MAX_DIMENSION + 1)
+
+    def test_valid_target_dimensions_still_accepted(self):
+        pixels = bytes([50] * (4 * 4))
+        resized = image_tools.resize_nearest(4, 4, pixels, 8, 8)
+        self.assertEqual(len(resized), 64)
+
 
 class DspTests(unittest.TestCase):
     def test_frame_signal_pads_final_frame(self):
@@ -152,6 +171,37 @@ class DspTests(unittest.TestCase):
 
     def test_normalize_vector_handles_silence(self):
         self.assertEqual(dsp.normalize_vector([0, 0, 0]), [0, 0, 0])
+
+
+class WaveToolsTests(unittest.TestCase):
+    def test_rejects_absurd_sample_rate(self):
+        # Fix 1 (2026-09-11): a WAV declaring a sample rate above
+        # MAX_SAMPLE_RATE must be refused up front. Written with the stdlib
+        # wave module directly so write_wave()'s own new ceiling doesn't
+        # block constructing the hostile fixture.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "hostile.wav"
+            with _stdlib_wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(wave_tools.MAX_SAMPLE_RATE + 1)
+                handle.writeframes(b"\x00\x00")
+            with self.assertRaises(wave_tools.WaveFormatError):
+                wave_tools.read_wave(path)
+
+    def test_normal_sample_rate_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ok.wav"
+            wave_tools.write_wave(path, 8000, [0, 100, -100, 50])
+            decoded = wave_tools.read_wave(path)
+            self.assertEqual(decoded["sample_rate"], 8000)
+            self.assertEqual(decoded["samples"], [0, 100, -100, 50])
+
+    def test_write_wave_rejects_absurd_sample_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.wav"
+            with self.assertRaises(wave_tools.WaveFormatError):
+                wave_tools.write_wave(path, wave_tools.MAX_SAMPLE_RATE + 1, [0, 1, 2])
 
 
 if __name__ == "__main__":

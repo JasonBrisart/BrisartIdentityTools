@@ -132,6 +132,26 @@ def probe(path) -> dict:
     magic, width, height, frame_count, frame_rate = HEADER_STRUCT.unpack(header_bytes)
     if magic != MAGIC:
         raise VideoFormatError("not a BRVID container (bad magic).")
+    if width <= 0 or height <= 0:
+        raise VideoFormatError("width and height must be positive.")
+    if width > MAX_DIMENSION or height > MAX_DIMENSION:
+        raise VideoFormatError("width or height exceeds the supported maximum.")
+    if frame_count <= 0:
+        raise VideoFormatError("frame_count must be positive.")
+    if frame_count > MAX_FRAME_COUNT:
+        raise VideoFormatError(
+            f"frame count exceeds the supported maximum of {MAX_FRAME_COUNT}."
+        )
+    if frame_rate <= 0:
+        raise VideoFormatError("frame_rate must be positive.")
+    # Fix 2 (2026-09-11): apply the same frame_count * width * height ceiling
+    # decode() gained in 1.3.3 (Fix 1 above), so probe() and decode() agree on
+    # what a well-formed header is rather than probe() silently accepting a
+    # header decode() would refuse.
+    if frame_count * width * height > MAX_BODY_BYTES:
+        raise VideoFormatError(
+            "frame_count * width * height exceeds the supported body-size ceiling."
+        )
     file_size = resolved.stat().st_size
     expected_size = HEADER_STRUCT.size + frame_count * width * height
     return {

@@ -4,6 +4,90 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.6] - 2026-09-11
+
+A security-hardening and bug-fix patch continuing the untrusted-input
+parsing work of 1.3.3. Every biometric enroll/verify run decodes an
+attacker-influenceable file (a WAV voice sample, a PGM/PNG fingerprint, a
+BRVID clip) *before* any cryptography happens, so these files are the
+earliest thing that touches the system. This release closes remaining
+"individually-valid header fields whose product or target size is
+unbounded" gaps in the codec layer. No stored vault, identity, keyring,
+biometric-template, attachment, package, or custody-chain format changed.
+There is no data migration; 1.3.5 data loads unchanged.
+
+As an LTS-2028 (1.3.x) release, this remains feature-frozen, pure-Python,
+and dependency-free: no new features, no hardware or device integration,
+and no third-party dependencies are introduced. These are security and
+correctness fixes only.
+
+### Security
+
+- **`biometrics/codecs/wave_tools.py`: the WAV sample rate is now bounded,
+  so the duration guard can no longer be neutralized by an absurd header
+  value.** `read_wave()` validated only `sample_rate <= 0` and had no upper
+  bound, so the existing `frame_count > sample_rate * MAX_DURATION_SECONDS`
+  ceiling could be pushed arbitrarily high by a hostile WAV declaring an
+  astronomically large sample rate — the same class of bug closed for the
+  BRVID container (`frame_count * width * height`) and the PNG IDAT stream
+  in 1.3.3. A new `MAX_SAMPLE_RATE` ceiling is checked up front, and a WAV
+  whose declared rate exceeds it is refused before any frames are read.
+  A legitimate recording's real, header-declared samples still round-trip
+  byte-for-byte. Regression test:
+  `biometrics/tests/test_codec_and_dsp_support.py::WaveToolsTests::test_rejects_absurd_sample_rate`.
+
+### Fixed
+
+- **`biometrics/codecs/image_tools.py`: `resize_nearest()` and
+  `crop_center()` now bound their *target* dimensions, not just the source
+  image's.** `_check_image()` already refused a decoded image whose own
+  width/height exceeded `MAX_DIMENSION`, but the target dimensions these two
+  functions resize/crop to were only checked `>= 1`, never `<= MAX_DIMENSION`
+  — so a target request larger than the supported maximum would allocate
+  `target_width * target_height` bytes with no ceiling. This is not reachable
+  from today's callers (the fingerprint and template paths pass fixed 64- and
+  128-pixel constants), but a shared image utility should refuse an
+  out-of-range target the same way it already refuses an out-of-range source.
+  Both functions now raise `ImageToolsError` on a target dimension above
+  `MAX_DIMENSION`. Regression test:
+  `biometrics/tests/test_codec_and_dsp_support.py::ImageToolsTests::test_rejects_oversized_target_dimensions`.
+
+- **`biometrics/codecs/video.py`: `probe()` now applies the same
+  `MAX_BODY_BYTES` ceiling to `frame_count * width * height` that `decode()`
+  gained in 1.3.3.** The header-only inspection path computed
+  `expected_size = HEADER_STRUCT.size + frame_count * width * height` purely
+  to report `size_matches_header`, so it never allocated the body and was not
+  itself an allocation bug — but leaving the product unbounded here while
+  `decode()` bounds it was an avoidable inconsistency. `probe()` now refuses a
+  header whose implied body exceeds the ceiling, so the two entry points into
+  the BRVID container agree on what a well-formed header is. Regression test:
+  `biometrics/tests/test_video_support.py::VideoCodecTests::test_probe_rejects_body_over_ceiling`.
+
+### Notes
+
+- These fixes originate on the `LTS-2028` branch and are PR-merged into
+  `main`, so both supported lines carry them: LTS-2028 (1.3.x) as a
+  security-and-correctness patch, and the latest release on `main` (Current)
+  through the merge. The Supported Versions table in `docs/SECURITY.md` is
+  unchanged.
+
+- This is parsing-layer and input-validation hardening only. It does **not**
+  change, and does not claim to strengthen, BSR2's own cryptography — every
+  wrapped master key and sealed payload is exactly as protected as it was in
+  1.3.5. The standing caveats still apply in full: BSR2 is unreviewed research
+  cryptography (see `docs/BSR2_INTEGRATION.md`), the package custody chain is
+  tamper-evident rather than a digital signature, and the video liveness gate
+  remains a motion-presence check rather than general anti-spoofing (KI-001).
+
+- No stored format changed and no shipped module's cryptographic behavior
+  changed; 1.3.5 vaults, identities, keyrings, templates, and packages load
+  unchanged.
+
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.3.5] - 2026-09-10
 
 A small, targeted patch closing the same filename-ordering bug fixed in
