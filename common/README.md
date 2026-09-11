@@ -45,6 +45,36 @@ they used to protect a secret. Secret material (passphrases, template
 vectors, package payloads) goes through the BSR2 factor and envelope layers
 in `crypto/` instead.
 
+### `integrity_ledger.py`
+
+An external, hash-chained ledger of periodic file checkpoints. Records a
+target file's SHA-256 + size into a ledger file external to it, chained to
+the previous entry (the same hash-chain construction `packages.custody`
+uses), so the *ledger itself* is tamper-evident — deleting, reordering, or
+editing a past checkpoint entry is detectable via `verify_ledger()`.
+
+This exists to narrow — not close — a blind spot every other tamper-evidence
+mechanism in this repository shares: they only ever inspect a file's
+*current* state, so a file edited and then reverted to its exact original
+bytes before the next inspection leaves no trace. If a checkpoint happens
+to land inside a tamper window, that checkpoint's recorded hash will
+disagree with its neighbors and expose it — but a tamper-then-revert that
+happens entirely *between* two checkpoints is, by mathematical necessity,
+undetectable. See [`docs/INTEGRITY_LEDGER.md`](../docs/INTEGRITY_LEDGER.md)
+and [`docs/KNOWN_ISSUES.md`](../docs/KNOWN_ISSUES.md) KI-004 before relying
+on this for anything real.
+
+Deliberately general-purpose and target-path-agnostic rather than folded
+into `vault/`, `biometrics/`, or `packages/` specifically, since all three
+store their master-key-wrapped state in exactly the kind of single file this
+concern applies to. Depends only on `hashing.py` and `atomic_io.py` above
+plus `timestamps.py` below — no BSR2/`crypto/` involvement, since this
+ledger's own integrity comes from a plain hash chain, not encryption.
+Invoked via the standalone CLI in
+[`tools/integrity_checkpoint.py`](../tools/integrity_checkpoint.py), meant
+to be run by hand or on an external schedule (cron, Windows Scheduled
+Task) — this module contains no scheduling or daemon logic of its own.
+
 ### `timestamps.py`
 
 Three UTC timestamp formats, each serving a different need:
