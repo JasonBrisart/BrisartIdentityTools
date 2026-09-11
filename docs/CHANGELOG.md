@@ -4,6 +4,74 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.5.0] - 2026-09-11
+
+Adds an inspectable, on-disk variant of the Identity-Bound Package demo,
+alongside the existing in-memory-only demo. No stored vault, identity,
+keyring, biometric-template, attachment, or package format changed. There
+is no data migration.
+
+### Added
+
+- **`packages/demo.py`**: new shared module, `run_demo(save_to_disk, output_root)`,
+  used by both `packages.main`'s `demo` command and
+  `gui.tabs.tab_packages.PackagesTab`'s Packages tab, so the CLI and GUI demo
+  paths can never drift apart from each other. Runs the exact same real
+  create -> add-recipient -> open -> validate-custody cycle the original
+  demo always performed.
+
+- **CLI**: `python main.py demo --save [--output-dir DIR]` now additionally
+  writes every artifact produced during the demo to a new, clearly-named
+  folder (`DEMO_DO_NOT_USE_<timestamp>_<package_id>/` under
+  `data/packages/demo` by default): the real `package.json`, each
+  recipient's passphrase text (`alice_passphrase.txt` / `bob_passphrase.txt`),
+  a formatted `custody_chain.txt`, and a `README.txt` walking through what
+  happened and what to try next -- including how to hand-edit the package
+  file and watch authentication correctly reject the tampered result.
+
+- **GUI**: the Packages tab gained a second button, **"Run Demo (Save Files)"**,
+  next to the existing **"Run Demo"** button. The existing button's behavior
+  is completely unchanged (still in-memory only, nothing written to disk).
+  The new button runs the same cycle with `save_to_disk=True` and offers to
+  open the resulting folder directly in the OS file manager
+  (`os.startfile` on Windows, `open`/`xdg-open` elsewhere, best-effort only).
+
+### Notes
+
+- **Demo keys are derived from passphrase text, not raw bytes.** Every
+  existing CLI/GUI command that asks for "master key text" derives a key by
+  hashing whatever text is typed (`hashlib.sha256(text)`); there is no
+  existing path that accepts a raw 32-byte key directly. `run_demo()`
+  therefore generates each recipient's key from a random passphrase string
+  and saves that passphrase text to disk, rather than a raw key -- so a
+  saved demo package can be opened immediately through the existing `open`
+  command or the GUI's "Open Package..." dialog with zero changes required
+  anywhere else in the codebase. Verified directly: `main.py open <saved
+  package> --identity-id bob` with the saved passphrase returns the real
+  decrypted payload.
+
+- **This is the one place in the repository a master key's text-equivalent
+  is ever written unwrapped to disk**, and it is deliberate and clearly
+  labeled: the folder name is prefixed `DEMO_DO_NOT_USE_`, and the written
+  `README.txt` states in capital letters that this is not how a real
+  package's key material should ever be stored (every other key-holding
+  file -- a vault, a biometrics keyring -- stores only a BSR2-wrapped key).
+
+- Tamper-detection was re-verified against the saved output: flipping a
+  single hex character in `payload.ciphertext` and reopening as bob
+  correctly raises an authentication failure, exactly as it would for any
+  other sealed package.
+
+- This is new feature work and therefore lands on `main` only, per the
+  LTS-2028 policy documented in `docs/SECURITY.md` ("No new features ...
+  are introduced into an LTS line for the life of that line"). LTS-2028
+  (1.3.x) is unaffected and its `demo` command's behavior is unchanged.
+
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.4.0] - 2026-09-11
 
 ### Added

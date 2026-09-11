@@ -1,9 +1,28 @@
 """The Packages tab: create, add/remove recipients on, open, and inspect the
-custody chain of Identity-Bound Packages."""
+custody chain of Identity-Bound Packages.
 
+Two demo entry points are provided, both backed by the single shared
+packages.demo.run_demo() implementation so the CLI's `demo` command and this
+tab can never drift apart from each other:
+
+    "Run Demo"              -- the original, in-memory-only sanity check.
+                               Nothing is written to disk; the result is
+                               shown once in a read-only transcript dialog
+                               and then gone.
+    "Run Demo (Save Files)" -- runs the identical cycle, but additionally
+                               writes the real package file, both
+                               recipients' passphrase text, and a formatted
+                               custody-chain summary to a clearly-named
+                               folder on disk, and offers to open that
+                               folder in the OS file manager so a new user
+                               can inspect (and try tampering with) real
+                               artifacts firsthand.
+"""
 import hashlib
 import json
-import secrets
+import os
+import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -11,9 +30,9 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from gui.core.constants import APP_TITLE, _Cancelled
 from gui.core.busy import run_in_background
 from gui.widgets.dialogs import TextPromptDialog, TextViewDialog
-
 from packages import package as ibp_package
 from packages.custody import CustodyError
+from packages.demo import run_demo
 from packages.package import PackageError
 
 
@@ -33,6 +52,7 @@ class PackagesTab(ttk.Frame):
         ttk.Button(top, text="Choose Package File...", command=self._choose_path).pack(side="left")
         self._path_label = ttk.Label(top, text="(none selected)")
         self._path_label.pack(side="left", padx=8)
+
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(0, 8))
         ttk.Button(actions, text="Create Package...", command=self._create_package).pack(side="left")
@@ -40,7 +60,9 @@ class PackagesTab(ttk.Frame):
         ttk.Button(actions, text="Remove Recipient...", command=self._remove_recipient).pack(side="left", padx=4)
         ttk.Button(actions, text="Open Package...", command=self._open_package).pack(side="left", padx=4)
         ttk.Button(actions, text="Verify Custody", command=self._verify_custody).pack(side="left", padx=4)
-        ttk.Button(actions, text="Run Demo", command=self._run_demo).pack(side="right")
+        ttk.Button(actions, text="Run Demo (Save Files)", command=self._run_demo_to_folder).pack(side="right")
+        ttk.Button(actions, text="Run Demo", command=self._run_demo).pack(side="right", padx=(0, 4))
+
         ttk.Label(self, text="Recipients:").pack(anchor="w")
         columns = ("identity_id", "label")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=8, selectmode="browse")
@@ -295,26 +317,12 @@ class PackagesTab(ttk.Frame):
         return True
 
     def _run_demo(self):
+        """Run the original, in-memory-only demo. Nothing is written to
+        disk; the transcript is shown once and then discarded."""
+
         def work():
-            package_id = f"demo-{secrets.token_hex(4)}"
-            alice_key = secrets.token_bytes(32)
-            bob_key = secrets.token_bytes(32)
-            log = [f"creating package {package_id!r} with recipient 'alice'..."]
-            state = ibp_package.create_package(
-                package_id, "Alice", {"message": "hello from the GUI demo package"},
-                {"alice": ("Alice", alice_key)},
-            )
-            log.append("adding recipient 'bob' (authorized by alice)...")
-            state = ibp_package.add_recipient(state, "bob", "Bob", bob_key, "alice", alice_key)
-            log.append("opening the package as 'bob'...")
-            payload, state = ibp_package.open_package(state, "bob", bob_key)
-            log.append(f"bob opened the package and read: {payload!r}")
-            log.append("verifying the custody chain...")
-            ibp_package.validate_package(state)
-            for entry in ibp_package.custody_summary(state):
-                log.append(f"  {entry['recorded_at']}  {entry['action']:<20} {entry['actor_label']}")
-            log.append("demo complete: custody chain is intact.")
-            return "\n".join(log)
+            result = run_demo(save_to_disk=False)
+            return "\n".join(result["transcript"])
 
         def on_success(transcript):
             TextViewDialog(self, "Package Demo", transcript)
@@ -323,3 +331,49 @@ class PackagesTab(ttk.Frame):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
 
         run_in_background(self, work, on_success, on_error, "Running demo (real BSR2 derivations)...")
+
+    def _run_demo_to_folder(self):
+        """Run the same demo cycle as _run_demo, but additionally write the
+        real package file, both recipients' passphrase text, and a
+        formatted custody-chain summary to a clearly-named folder on disk,
+        then offer to open that folder in the OS file manager."""
+
+        def work():
+            return run_demo(save_to_disk=True)
+
+        def on_success(result):
+            transcript = "\n".join(result["transcript"])
+            TextViewDialog(self, "Package Demo (Saved to Disk)", transcript)
+            folder = result.get("folder")
+            if folder is not None and messagebox.askyesno(
+                APP_TITLE,
+                f"Demo artifacts saved to:\n{folder}\n\nOpen this folder now?",
+                parent=self,
+            ):
+                self._open_folder(folder)
+
+        def on_error(exc):
+            messagebox.showerror(APP_TITLE, str(exc), parent=self)
+
+        run_in_background(self, work, on_success, on_error, "Running demo and saving artifacts...")
+
+    @staticmethod
+    def _open_folder(folder: Path) -> None:
+        """Open a folder in the OS's file manager, best-effort only.
+
+        Uses os.startfile on Windows (this project's primary development
+        platform per version.py's git history), and falls back to `open`
+        (macOS) / `xdg-open` (Linux) elsewhere. Never raises: if none of
+        these succeed, the folder path was already shown in the dialog the
+        caller just displayed, so a failure here only means the user
+        navigates there manually instead of automatically.
+        """
+        try:
+            if os.name == "nt":
+                os.startfile(str(folder))  # noqa: S606 - user-initiated, local path only
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(folder)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(folder)], check=False)
+        except OSError:
+            pass

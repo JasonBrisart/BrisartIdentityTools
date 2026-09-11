@@ -1,21 +1,23 @@
 """Identity-Bound Packages command-line interface.
 
 Since a package requires an existing recipient's master key to authorize
-adding or removing another recipient (see ``package.add_recipient`` /
-``package.remove_recipient``), this CLI works against a local JSON file per
+adding or removing another recipient (see `package.add_recipient` /
+`package.remove_recipient`), this CLI works against a local JSON file per
 package and prompts for whichever master keys an operation needs. A "demo"
 command is included that runs a full create -> add-recipient -> open cycle
 in one shot with generated keys, useful for a quick end-to-end sanity check
-with no setup.
+with no setup. Pass `--save` to that command to additionally write every
+demo artifact (the package file, both recipients' raw master keys, and a
+formatted custody-chain summary) to an inspectable folder on disk -- see
+packages/demo.py's module docstring for exactly what gets written and why.
 """
 import argparse
 import getpass
 import json
-import secrets
 import sys
 from pathlib import Path
 
-from packages import package
+from packages import demo, package
 from packages.custody import CustodyError
 from packages.identity import RecipientIdentityError
 from packages.package import PackageAuthorizationError, PackageError
@@ -67,7 +69,6 @@ def command_create(args) -> int:
         raise AppError(f"--payload must be valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise AppError("--payload must be a JSON object.")
-
     master_key = _prompt_master_key(args.identity_id)
     recipients = {args.identity_id: (args.label, master_key)}
     try:
@@ -149,30 +150,20 @@ def command_verify_custody(args) -> int:
     return 0
 
 
-def command_demo(_args) -> int:
-    """Run a full create -> add-recipient -> open cycle with generated keys."""
-    package_id = f"demo-{secrets.token_hex(4)}"
-    alice_key = secrets.token_bytes(32)
-    bob_key = secrets.token_bytes(32)
+def command_demo(args) -> int:
+    """Run a full create -> add-recipient -> open cycle with generated keys.
 
-    print(f"creating package {package_id!r} with recipient 'alice'...")
-    state = package.create_package(
-        package_id, "Alice", {"message": "hello from the demo package"},
-        {"alice": ("Alice", alice_key)},
-    )
-
-    print("adding recipient 'bob' (authorized by alice)...")
-    state = package.add_recipient(state, "bob", "Bob", bob_key, "alice", alice_key)
-
-    print("opening the package as 'bob'...")
-    payload, state = package.open_package(state, "bob", bob_key)
-    print(f"bob opened the package and read: {payload!r}")
-
-    print("verifying the custody chain...")
-    package.validate_package(state)
-    for entry in package.custody_summary(state):
-        print(f"  {entry['recorded_at']}  {entry['action']:<20} {entry['actor_label']}")
-    print("demo complete: custody chain is intact.")
+    Pass --save to additionally write every artifact produced (the package
+    file, both recipients' passphrase text, and a formatted custody-chain
+    summary) to a clearly-named, inspectable folder on disk, instead of
+    the default behavior of discarding everything once the transcript has
+    been printed. --output-dir controls where that folder is created;
+    it defaults to data/packages/demo.
+    """
+    output_root = Path(args.output_dir) if args.output_dir else None
+    result = demo.run_demo(save_to_disk=args.save, output_root=output_root)
+    for line in result["transcript"]:
+        print(line)
     return 0
 
 
@@ -217,8 +208,18 @@ def build_parser() -> argparse.ArgumentParser:
     verify_custody.add_argument("package_file")
     verify_custody.set_defaults(handler=command_verify_custody)
 
-    demo = subparsers.add_parser("demo", help="run a full create/add/open cycle with generated keys.")
-    demo.set_defaults(handler=command_demo)
+    demo_command = subparsers.add_parser("demo", help="run a full create/add/open cycle with generated keys.")
+    demo_command.add_argument(
+        "--save", action="store_true",
+        help="also write every demo artifact (package file, both recipients' passphrase "
+             "text, and a custody summary) to an inspectable folder on disk.",
+    )
+    demo_command.add_argument(
+        "--output-dir", default=None,
+        help="directory to create the saved demo folder under (default: data/packages/demo). "
+             "Only used together with --save.",
+    )
+    demo_command.set_defaults(handler=command_demo)
 
     return parser
 

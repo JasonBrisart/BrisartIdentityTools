@@ -1,0 +1,224 @@
+"""
+File: packages/demo.py
+Purpose:
+    Shared demo-package logic for both the CLI (`packages.main`'s `demo`
+    command) and the GUI (`gui.tabs.tab_packages.PackagesTab`'s "Run Demo"
+    button). Runs a complete, real create -> add-recipient -> open ->
+    validate-custody cycle using freshly generated keys, and optionally
+    writes every artifact produced along the way to a plain,
+    human-inspectable folder on disk so a new user can open the actual
+    package file, the actual key material, and the actual custody chain in
+    a text editor rather than only reading a printed transcript.
+
+    This lives as its own module (rather than being written twice, once in
+    packages/main.py and once in gui/tabs/tab_packages.py) so the CLI and
+    the GUI can never drift apart from each other.
+
+Communication relationships:
+    Called by:
+        - packages.main.command_demo (CLI), via the existing `demo`
+          subcommand's new `--save` / `--output-dir` flags.
+        - gui.tabs.tab_packages.PackagesTab._run_demo and
+          ._run_demo_to_folder (GUI), both run on a background thread via
+          gui.core.busy.run_in_background, since this performs real BSR2
+          sealing/unwrapping work and must not block the Tkinter event
+          loop.
+    Calls out to:
+        - packages.package (create_package / add_recipient / open_package /
+          validate_package / custody_summary) -- the exact same application
+          layer a real package goes through end to end; nothing about the
+          demo path is a stub, a mock, or a simplified re-implementation.
+        - common.timestamps.filename_timestamp -- for the demo folder name,
+          so folders sort chronologically and never collide within the
+          same second.
+        - common.atomic_io.atomic_write_text / atomic_write_json -- every
+          file this module writes goes through the same atomic
+          write-then-rename primitive the rest of the repository uses, so a
+          crash mid-write cannot leave a half-written demo artifact behind.
+
+Parameters / settings:
+    DEMO_FOLDER_PREFIX (str, "DEMO_DO_NOT_USE_"):
+        Every on-disk demo folder starts with this prefix so it is visually
+        unmistakable in a file browser or directory listing, distinct from
+        any real package file a lab might have sitting in the same data/
+        tree. This is a naming convention only.
+    DEFAULT_DEMO_ROOT (Path, "data/packages/demo"):
+        Where a saved demo folder is created when the caller does not pass
+        an explicit output_root. Consistent with this project's existing
+        data/packages/ convention (see packages/main.py's
+        DEFAULT_AUDIT_DIR).
+
+Edge-case behavior:
+    - save_to_disk=False (the default) reproduces the original in-memory-
+      only "Run Demo" behavior exactly: nothing is written anywhere, and
+      the returned "folder" value is None.
+    - save_to_disk=True generates each recipient's master key from a
+      random PASSPHRASE STRING (hashed exactly the way
+      packages.main._prompt_master_key and
+      gui.tabs.tab_packages.PackagesTab._derive_master_key already derive
+      a master key from whatever text an operator types), rather than
+      handing out 32 raw key bytes directly. Every existing CLI command
+      that asks for "master key text" only ever accepts typed text and
+      re-derives a key from it -- there is currently no CLI path that
+      accepts a raw 32-byte key directly. Saving the passphrase TEXT
+      instead means a user can paste it into any existing CLI prompt or
+      GUI "master key text" field and it works immediately, with no
+      changes required anywhere else in the codebase.
+    - The saved passphrase text is still sensitive material in the clear,
+      and the written README.txt says so explicitly, in capital letters,
+      so nobody mistakes this demo convenience for how a real package's
+      key material should ever be handled or stored.
+    - The demo package's custody chain is real and independently
+      verifiable: a user can hand-edit the written package.json (e.g. flip
+      a single hex character inside payload -> ciphertext) and then re-run
+      `python main.py open <path> --identity-id bob` against it to see the
+      rejection firsthand, using the exact same
+      packages.package.open_package code path a genuinely tampered
+      package would hit.
+    - output_root is created (including parents) if it does not already
+      exist; a caller supplying a path on a read-only filesystem will see
+      whatever OSError mkdir() itself raises, uncaught.
+"""
+import hashlib
+import secrets
+from pathlib import Path
+
+from common.atomic_io import atomic_write_json, atomic_write_text
+from common.timestamps import filename_timestamp
+from packages import package as ibp_package
+
+DEMO_FOLDER_PREFIX = "DEMO_DO_NOT_USE_"
+DEFAULT_DEMO_ROOT = Path("data") / "packages" / "demo"
+
+_README_TEMPLATE = """\
+This folder was generated by BrisartIdentityTools' Identity-Bound Package
+demo. Everything in it is real output from the actual sealing/unwrapping
+code -- nothing here is faked or simplified for display purposes.
+
+WHAT HAPPENED, IN ORDER
+------------------------
+1. A package was created, initially readable only by recipient "alice".
+2. A second recipient, "bob", was added (authorized by alice's key).
+3. "bob" opened the package and read its payload.
+4. The package's custody chain was verified as intact.
+
+FILES IN THIS FOLDER
+---------------------
+package.json              The actual package state: recipient list, each
+                          recipient's sealed key slot, the sealed payload,
+                          and the full custody chain. This is byte-for-
+                          byte the same shape a real package file has.
+
+alice_passphrase.txt      The passphrase text alice's master key was
+                          derived from. Paste this exact text into any
+                          "master key text" prompt below to act as alice.
+bob_passphrase.txt        Same, for bob.
+
+custody_chain.txt         A human-readable summary of the custody chain
+                          above, already formatted for reading (action,
+                          actor, time).
+
+WHAT YOU CAN TRY
+-----------------
+- Open package.json in any text editor. Look at the "key_slots" section --
+  you'll see one sealed entry per recipient. Look at "payload" -- that's
+  the encrypted content, unreadable without a valid master key.
+
+- List this package's recipients (no key needed):
+
+      python main.py list-recipients {package_path}
+
+- Verify the custody chain is intact (no key needed):
+
+      python main.py verify-custody {package_path}
+
+- Open the package as bob (you will be prompted for master key text --
+  paste in the exact contents of bob_passphrase.txt):
+
+      python main.py open {package_path} --identity-id bob
+
+- Now deliberately break something: open package.json, flip a single hex
+  character inside "payload" -> "ciphertext", save the file, and run the
+  open command above again with bob's passphrase. It will fail
+  authentication -- that is the same protection a real tampered package
+  would trigger.
+
+*** IMPORTANT -- READ BEFORE DOING ANYTHING ELSE WITH REAL PACKAGES ***
+The two .txt passphrase files in this folder are sensitive key material,
+written in plain text on purpose so you can inspect and use them by hand.
+This is NOT how a real package's key material should ever be stored. Delete
+this folder when you are done exploring it.
+"""
+
+
+def _passphrase_to_master_key(passphrase: str) -> bytes:
+    """Derive a 32-byte master key from typed text, identically to
+    packages.main._prompt_master_key and
+    gui.tabs.tab_packages.PackagesTab._derive_master_key. Kept in sync with
+    both by design: all three must agree on this derivation, or a
+    passphrase saved by one path would not open a package sealed by
+    another."""
+    return hashlib.sha256(passphrase.encode("utf-8")).digest()
+
+
+def run_demo(save_to_disk: bool = False, output_root=None) -> dict:
+    """Run a full create -> add-recipient -> open -> validate-custody cycle.
+
+    Always performs real BSR2 sealing/unwrapping using freshly generated
+    keys, exactly as the original in-memory-only demo did. When
+    save_to_disk is True, every artifact produced along the way is also
+    written to a new, clearly-named folder on disk for manual inspection.
+
+    Returns a dict with keys:
+        "transcript": list[str] -- one line per demo step, for display.
+        "package_id": str
+        "folder": Path or None  -- the demo folder, or None if
+                                    save_to_disk was False.
+    """
+    package_id = f"demo-{secrets.token_hex(4)}"
+    alice_passphrase = secrets.token_hex(16)
+    bob_passphrase = secrets.token_hex(16)
+    alice_key = _passphrase_to_master_key(alice_passphrase)
+    bob_key = _passphrase_to_master_key(bob_passphrase)
+    transcript = [f"creating package {package_id!r} with recipient 'alice'..."]
+
+    state = ibp_package.create_package(
+        package_id, "Alice", {"message": "hello from the demo package"},
+        {"alice": ("Alice", alice_key)},
+    )
+    transcript.append("adding recipient 'bob' (authorized by alice)...")
+    state = ibp_package.add_recipient(state, "bob", "Bob", bob_key, "alice", alice_key)
+
+    transcript.append("opening the package as 'bob'...")
+    payload, state = ibp_package.open_package(state, "bob", bob_key)
+    transcript.append(f"bob opened the package and read: {payload!r}")
+
+    transcript.append("verifying the custody chain...")
+    ibp_package.validate_package(state)
+    for entry in ibp_package.custody_summary(state):
+        transcript.append(f"  {entry['recorded_at']}  {entry['action']:<20} {entry['actor_label']}")
+    transcript.append("demo complete: custody chain is intact.")
+
+    folder = None
+    if save_to_disk:
+        root = Path(output_root) if output_root is not None else DEFAULT_DEMO_ROOT
+        folder = root / f"{DEMO_FOLDER_PREFIX}{filename_timestamp()}_{package_id}"
+        folder.mkdir(parents=True, exist_ok=True)
+
+        package_path = folder / "package.json"
+        atomic_write_json(package_path, state)
+
+        atomic_write_text(folder / "alice_passphrase.txt", alice_passphrase)
+        atomic_write_text(folder / "bob_passphrase.txt", bob_passphrase)
+
+        custody_lines = [
+            f"{entry['recorded_at']}  {entry['action']:<20} {entry['actor_label']}"
+            for entry in ibp_package.custody_summary(state)
+        ]
+        atomic_write_text(folder / "custody_chain.txt", "\n".join(custody_lines) + "\n")
+
+        atomic_write_text(folder / "README.txt", _README_TEMPLATE.format(package_path=package_path))
+
+        transcript.append(f"demo artifacts saved to: {folder}")
+
+    return {"transcript": transcript, "package_id": package_id, "folder": folder}
