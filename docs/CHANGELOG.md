@@ -4,6 +4,34 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.4.0] - 2026-09-11
+
+### Added
+
+- Introduced a dedicated `hardware/` subsystem on the main development branch.
+- Established the foundation for future hardware and device integration support.
+- Added a reserved hardware integration namespace to isolate device-specific functionality from the core identity platform.
+- Implemented an architecture that allows hardware functionality to be added, updated, or removed independently of the core BrisartIdentityTools codebase.
+- Established a clear separation between the dependency-free identity framework and future hardware integration layers.
+- Created the initial foundation for future biometric device, access-control device, and hardware adapter support.
+
+### Architecture
+
+- Defined the hardware subsystem as an optional extension layer that communicates with existing BrisartIdentityTools functionality rather than modifying core platform behavior.
+- Preserved the existing dependency-free architecture of the core identity platform.
+- Designed the hardware subsystem so future hardware support can be developed without requiring invasive changes throughout the repository.
+- Established the architectural boundary that differentiates the Current (main) development line from the Long-Term Support (LTS) line.
+
+### Notes
+
+- No hardware devices are supported in this release.
+- No hardware drivers are included in this release.
+- No third-party dependencies were introduced.
+- Existing identity, biometric, vault, package, and cryptographic functionality remain unchanged.
+- LTS-2028 (1.3.x) remains feature-frozen and continues to exclude all hardware and device integration functionality.
+
+---
+
 ## [1.3.6] - 2026-09-11
 
 A security-hardening and bug-fix patch continuing the untrusted-input
