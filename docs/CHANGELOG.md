@@ -4,6 +4,81 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.6.0] - 2026-09-11
+
+Adds an **Integrity Ledger**: an external, hash-chained ledger of periodic
+file checkpoints, meant to narrow — not close — the "edit a sealed file,
+then revert it to its original bytes before anyone checks" blind spot every
+tamper-evidence mechanism already in this repository (BSR2's authentication
+tag, `packages.custody`'s in-package hash chain, the external audit logs in
+`vault/`, `biometrics/`, and `packages/`) shares by mathematical necessity:
+all of them only ever inspect a file's *current* state. No stored vault,
+identity, keyring, biometric-template, attachment, or package format
+changed. There is no data migration.
+
+### Added
+
+- **`common/integrity_ledger.py`**: new module. `append_checkpoint()`
+  records a file's SHA-256 + size into an external, hash-chained ledger
+  (the same hash-chain construction `packages.custody` already uses, so the
+  *ledger itself* is tamper-evident — editing, deleting, or reordering a
+  past checkpoint entry is detectable via `verify_ledger()`).
+  `current_status()` compares a file's current hash against its most recent
+  checkpoint. `history_for_path()` and `list_tracked_paths()` inspect a
+  ledger's recorded history. Depends only on `common.hashing`,
+  `common.atomic_io`, and `common.timestamps` — no BSR2/crypto involvement,
+  since this ledger's own integrity comes from a plain hash chain, not
+  encryption.
+- **`tools/integrity_checkpoint.py`**: new standalone CLI, in the same style
+  as `tools/envinfo.py`. `checkpoint`, `status`, `history`, `verify`, and
+  `list-tracked` subcommands, meant to be run by hand or on an OS-level
+  scheduler (cron / Windows Scheduled Task) against any file this project
+  produces (a `vault.json`, a biometrics `keyring.json`, a package `.json`
+  file, or anything else a lab wants tracked).
+- **`docs/INTEGRITY_LEDGER.md`**: new file. Explains the mechanism, states
+  plainly what it does and does not detect (with a worked example of both
+  the "checkpoint lands inside the tamper window" case it catches and the
+  "tamper-then-revert entirely between checkpoints" case it cannot), and
+  gives CLI usage and suggested cadence.
+- **`common/tests/test_integrity_ledger.py`**: 20 new tests, including two
+  that directly exercise the core scenario this feature exists for: a
+  tamper-then-revert that straddles a checkpoint is caught
+  (`test_edit_then_revert_straddling_a_checkpoint_is_caught`), and the
+  honest confirmation that a tamper-then-revert entirely between two
+  checkpoints is *not* caught
+  (`test_edit_then_revert_entirely_between_checkpoints_is_not_caught`).
+
+### Notes
+
+- **This is new feature work and therefore lands on `main` only**, per the
+  LTS-2028 policy documented in `docs/SECURITY.md` ("No new features ...
+  are introduced into an LTS line for the life of that line"). Nothing
+  about the tamper-evidence already shipped in LTS-2028 (1.3.x) is broken
+  or being fixed here — BSR2's authentication tag, `packages.custody`'s hash
+  chain, and every audit log already work exactly as designed, within their
+  documented limits. This module adds a *new* capability (narrowing, not
+  fixing, the current-state-only blind spot), which is explicitly out of
+  scope for an LTS line.
+- **This does not close the "edit then perfectly revert" gap; it narrows
+  it, in proportion to checkpoint frequency.** A lab that never runs
+  `checkpoint` gets nothing from this feature. A lab that runs it
+  continuously would close the gap almost entirely, at the cost of running
+  a persistent process this project deliberately does not ship. Anywhere
+  in between is a genuine tradeoff between operational overhead and how
+  small a tamper-then-revert window remains undetectable — stated
+  explicitly in `docs/INTEGRITY_LEDGER.md` and the module's own docstring,
+  the same way `biometrics/features/liveness.py`'s scope statement and
+  `docs/KNOWN_ISSUES.md`'s KI-003 entry state their own limits rather than
+  implying more than they deliver.
+- Added `docs/KNOWN_ISSUES.md` KI-004, documenting this same blind-window
+  limitation as a permanent, by-design characteristic (not a defect to be
+  fixed), consistent with how KI-003 already documents the bulk-encryption
+  throughput ceiling.
+- No new external dependencies were introduced; the project remains pure
+  Python, standard-library only.
+
+---
+
 ## [1.5.0] - 2026-09-11
 
 Adds an inspectable, on-disk variant of the Identity-Bound Package demo,

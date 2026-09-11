@@ -74,6 +74,46 @@ reflects only what is genuinely still outstanding.
 
 ---
 
+## KI-004: Integrity Ledger cannot detect a tamper-then-revert entirely between two checkpoints
+
+- **Reported date:** 2026-09-11
+- **Severity:** Low (documented, by-design limitation, not a defect)
+- **Environment:** All platforms; affects `common/integrity_ledger.py` and
+  `tools/integrity_checkpoint.py` only.
+- **Component:** Integrity Ledger (checkpoint/status/history/verify)
+- **Steps to Reproduce:**
+  1. Record a checkpoint of a file (`checkpoint`).
+  2. Edit the file, then restore it to its exact original bytes, with no
+     checkpoint taken in between.
+  3. Record another checkpoint (`checkpoint`), then compare `status` /
+     `history` against the two checkpoints.
+- **Expected behavior:** N/A — this is a mathematical property of comparing
+  point-in-time snapshots, not a defect to be fixed without adding
+  continuous (rather than periodic) monitoring, which this project
+  deliberately does not ship (would require either a persistent background
+  process or a third-party scheduling dependency).
+- **Actual behavior:** The two checkpoints (before and after the
+  tamper-then-revert) record identical hashes. Nothing in the ledger, or
+  anywhere else in this repository (BSR2's authentication tag,
+  `packages.custody`'s hash chain, any external audit log), can distinguish
+  this from "nothing happened."
+- **Tried / Ruled out:** Confirmed the *converse* case works correctly: if a
+  checkpoint happens to be taken while the tampered state exists (i.e. the
+  checkpoint interval is short enough to land inside the tamper window),
+  the mismatch is captured and remains visible in `history` even after the
+  file is reverted. See
+  `common/tests/test_integrity_ledger.py::CurrentStatusTests::test_edit_then_revert_straddling_a_checkpoint_is_caught`
+  and its explicit converse,
+  `test_edit_then_revert_entirely_between_checkpoints_is_not_caught`.
+- **Next step:** None planned. This is stated explicitly in
+  `docs/INTEGRITY_LEDGER.md` and the module's own docstring as the tradeoff
+  a lab accepts by choosing periodic (rather than continuous) checkpointing.
+  A lab that needs a smaller window should increase checkpoint frequency,
+  understanding that the window only shrinks and never reaches zero without
+  continuous monitoring outside this project's scope.
+
+---
+
 ## Template
 
 Use this template for new entries:
