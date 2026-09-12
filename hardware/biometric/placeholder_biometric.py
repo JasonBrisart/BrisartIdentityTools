@@ -22,4 +22,3 @@ class PlaceholderBiometric(BiometricBase):
 
     def scan(self):
         return None
-``

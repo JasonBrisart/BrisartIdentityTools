@@ -4,6 +4,117 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+### [1.7.0] - 2026-09-12
+
+Introduces `hardware/`, an optional device-integration layer for physical
+cameras and smart card readers — the first release on **main** to diverge
+from LTS-2028 in scope rather than only in patch content. Every existing
+subsystem (Vault, Biometrics, Packages, Crypto) is untouched: nothing in
+`hardware/` is imported by, or wired into, any of them. A checkout with
+`hardware/` deleted entirely still behaves identically to one that
+includes it. No stored vault, identity, keyring, biometric-template,
+attachment, package, or custody-chain format changed. There is no data
+migration.
+
+As explicitly called out in 1.3.x's own release notes, this feature is
+**main-only and excluded from LTS-2028 by policy**: LTS-2028 remains
+feature-frozen, pure-Python, and free of any hardware or device
+integration for its full support lifetime.
+
+#### Added
+- **`hardware/base/device_base.py`**: `DeviceBase`, the root abstract
+  contract every device satisfies — `name` (property),
+  `connect() -> bool`, `disconnect() -> None`, `health_check() -> bool`.
+  Contains no vendor-specific logic of any kind.
+- **`hardware/base/camera_base.py`**, **`biometric_base.py`**,
+  **`reader_base.py`**: thin `DeviceBase` subclasses adding exactly one
+  modality-specific abstract method each — `capture_image()`, `scan()`,
+  and `read_card()` respectively.
+- **`hardware/registry.py`** and **`hardware/hardware_manager.py`**: a
+  plain dict-backed device registry (`register()` / `get()` /
+  `list_registered()`) and `HardwareManager.create_device(name)`, the
+  single entry point between the rest of this project and any
+  registered driver. No driver is registered automatically; nothing
+  under `hardware/` runs unless explicitly opted into.
+- **`hardware/exceptions.py`**: `HardwareError`, `DeviceConnectionError`,
+  `UnsupportedDeviceError` — the exception family every driver in this
+  subsystem raises.
+- **`hardware/cameras/onvif_camera.py`**: a real, complete `CameraBase`
+  driver for any ONVIF-compliant IP camera (Axis, Hikvision, Dahua, and
+  most budget IP cameras). Implements WS-Security UsernameToken auth,
+  `GetCapabilities`, `GetProfiles`, `GetSnapshotUri`, and
+  `GetSystemDateAndTime` as hand-built SOAP/XML using only
+  `urllib.request`, `xml.etree.ElementTree`, `hashlib`, `base64`, and
+  `os` from the standard library. **Zero third-party packages.** ONVIF
+  is a published, vendor-neutral network standard with no OS-proprietary
+  layer comparable to smart-card middleware, so this driver connects
+  all the way to the camera itself rather than deferring to a
+  caller-supplied binding.
+- **`hardware/card_readers/pcsc_reader.py`**: a real `ReaderBase` driver
+  for any PC/SC-compliant smart card reader (ACR122U, HID Omnikey,
+  Identiv, and most USB/contactless readers). Contains 100% of the
+  logic this project can implement in pure Python — reader-name
+  matching, retry policy, `GET_UID` APDU construction, status-word
+  validation, and hex encoding of the ATR/UID — with **zero third-party
+  packages and zero OS calls of its own**. This file makes no `ctypes`
+  call and contains no platform check anywhere in its source.
+- **`hardware/base/pcsc_binding.py`**: `PCSCBinding`, an abstract
+  five-method contract (`establish_context`, `release_context`,
+  `list_readers`, `connect`, `disconnect`, `get_atr`, `transmit`) for the
+  one operation this project deliberately does not implement: the raw
+  call into an operating system's own PC/SC service (`winscard.dll` on
+  Windows, `PCSC.framework` on macOS, `libpcsclite` on Linux). This
+  project ships the contract only; `PCSCReader` requires a
+  caller-supplied `PCSCBinding` instance at construction and raises
+  `TypeError` immediately if one is not provided. Implementing that
+  binding, for whichever OS(es) a deployment actually runs, is left to
+  the organization deploying this software.
+- **`hardware/cameras/placeholder_camera.py`**,
+  **`hardware/card_readers/placeholder_reader.py`**,
+  **`hardware/biometric/placeholder_biometric.py`**: zero-dependency
+  reference implementations proving each `DeviceBase` contract is
+  satisfiable, used for architecture testing ahead of real drivers.
+- **`hardware/drivers/`**: reserved, currently empty directory for
+  future low-level drivers.
+- **`hardware/README.md`**: documents the device contract, the
+  dependency status of every driver, and the reasoning behind the
+  PC/SC binding hand-off.
+
+#### Notes
+- **Dependency accounting, precisely stated:** every file under
+  `hardware/` imports only the Python standard library or other
+  `hardware/*` modules. No PyPI package, no vendored third-party source,
+  and no license notice obligation is introduced anywhere in this
+  subsystem.
+- **The one real proprietary boundary in this release is PC/SC, and
+  this project stops one step short of it.** PC/SC has no path on any
+  OS that avoids the operating system's own smart-card service —
+  `pcsc_reader.py` contains every piece of logic that can be written
+  without touching it, and defers the actual OS call to a
+  `PCSCBinding` an operator supplies. ONVIF has no equivalent wall: it
+  is XML over an HTTP socket, which the standard library already
+  speaks completely, so `onvif_camera.py` is shipped as a complete,
+  working driver.
+- Neither driver has been validated against physical hardware as part
+  of this repository's own test suite (no CI runner has a camera or
+  card reader attached). Both are correct against their documented
+  protocols; real-world calibration against specific vendor firmware
+  is open, in the same spirit as `docs/KNOWN_ISSUES.md`'s KI-001.
+- A lab that never registers a driver via `hardware.registry.register()`
+  is entirely unaffected by this release — `HardwareManager` and the
+  registry perform no work and make no calls until something explicitly
+  opts in.
+- No new external dependencies were introduced anywhere in this
+  project; `hardware/` keeps BrisartIdentityTools' non-hardware
+  subsystems exactly as dependency-free as before. The standing
+  caveats are unchanged and still apply in full: BSR2 is unreviewed
+  research cryptography (see `docs/BSR2_INTEGRATION.md`), the package
+  custody chain is tamper-evident rather than a digital signature, and
+  the video liveness gate remains a motion-presence check rather than
+  general anti-spoofing (KI-001).
+
+---
+
 ## [1.6.0] - 2026-09-11
 
 Adds an **Integrity Ledger**: an external, hash-chained ledger of periodic
