@@ -68,7 +68,7 @@ from vault.records.record_model import (
 )
 from vault.reports import audit_log
 from vault.store.vault_file import (
-    create_vault_file, load_records, load_state, save_keyring, save_records,
+    create_vault_file, load_records, load_state, save_keyring, save_records, save_state,
 )
 
 # The vault record "kind" reserved for arbitrary raw-file payloads created by
@@ -401,3 +401,4 @@ class VaultService:
         new_code = self._keyring.rotate_recovery_code()
         save_keyring(self.path, self._keyring)
         return new_code
+      
