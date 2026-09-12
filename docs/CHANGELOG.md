@@ -4,6 +4,51 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.8] - 2026-09-12 — LTS-2028 Test-Correctness Update
+
+A test-correctness release following the 1.3.7 authentication-throttling work. No shipped security behavior changed. This release corrects a regression test whose expectations did not match the intended shared unlock-throttling policy introduced in 1.3.7.
+
+Per LTS-2028 policy, this is a narrowly scoped correctness fix applied without altering the frozen architecture: no new features, no hardware or device integration, no new dependencies, and no stored-format changes.
+
+Each fix below is a self-contained unit that can be read, reviewed, and, if ever necessary, reverted independently.
+
+### Fix 1 of 1 — Shared unlock-throttling regression-test correction
+
+| Field | Details |
+|---|---|
+| **ID** | `LTS-2028-COR-1` |
+| **Severity** | Low |
+| **Component** | `vault/`, `crypto/`, `tests/` |
+| **Affected versions** | 1.3.7 |
+| **Files changed** | `vault/tests/test_unlock_throttle.py` |
+
+**Gap.** Version 1.3.7 introduced a shared unlock-attempt budget between the vault passphrase and recovery-code unlock paths. The regression test `test_recovery_code_unlock_shares_the_same_counter_as_passphrase` was intended to confirm that a successful recovery-code unlock clears a counter previously incremented by a failed passphrase attempt. However, the test attempted the recovery-code unlock immediately after recording the failed passphrase attempt.
+
+That expectation was incorrect. The shared throttling design intentionally applies the same persisted backoff state to both credential types. After the first failed passphrase attempt, the limiter enters its initial one-second backoff period. A recovery-code unlock attempted during that period must therefore be refused before any `Keyring` construction or KDF work occurs. The shipped implementation behaved correctly; the regression test did not account for the active backoff interval.
+
+**Fix.** The regression test now expires only the temporary `locked_until` time gate before attempting the recovery-code unlock, while preserving the recorded `failed_attempts` value. This allows the test to verify the shared-counter behavior without waiting on wall-clock time or discarding the state it is intended to inspect.
+
+The corrected sequence verifies that:
+
+1. A failed passphrase attempt increments the persisted shared counter.
+2. The resulting backoff applies to both passphrase and recovery-code authentication paths.
+3. Expiring only the temporary time gate leaves the failed-attempt count intact.
+4. A subsequent successful recovery-code unlock clears that same shared counter.
+
+**Verification.** `vault/tests/test_unlock_throttle.py` now confirms the intended cross-credential behavior deterministically, without using `sleep()` or introducing a timing-sensitive test. The corrected file also passes Python syntax compilation.
+
+**Out of scope for this fix.** This release does not modify `AttemptLimiter`, `crypto/attempt_store.py`, `VaultService`, vault unlock policy, recovery-code handling, backoff durations, lockout thresholds, authentication requirements, cryptographic primitives, or any production application path.
+
+### Notes
+
+- This release does not remediate a newly discovered security vulnerability. The unlock-throttling implementation shipped in 1.3.7 behaved as intended; the defect was confined to the regression test used to verify that implementation.
+- The failed CI result was a test-expectation error, not evidence that the shared passphrase/recovery-code limiter could be bypassed. The immediate recovery-code refusal demonstrated that both credential paths were consulting the same active throttling state.
+- No stored vault, identity, keyring, biometric-template, attachment, package, or custody-chain format changed.
+- No migration is required. Data written by 1.3.7 loads unchanged.
+- No new external dependencies were introduced. The project remains pure Python and standard-library only, consistent with the LTS-2028 dependency-free guarantee.
+
+---
+
 ## [1.3.7] - 2026-09-12 — LTS-2028 Security Update
 
 Two independent security fixes, each isolated to the specific component it
