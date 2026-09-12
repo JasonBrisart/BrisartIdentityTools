@@ -19,6 +19,15 @@ frame clip) is refused/reported as a non-match. See
 biometrics/features/liveness.py's module docstring for exactly what this
 gate does and does not detect.
 
+UNLOCK THROTTLING (since 1.3.7): keyring unlock (the passphrase prompt in
+_unlock_keyring()) is enforced through biometrics.identity.keyring_access,
+which persists crypto.throttle.AttemptLimiter state directly inside
+keyring.json and refuses an unlock attempt outright once the attempt budget
+is exhausted -- before BSR2's slow KDF is even run. This is the identical
+policy gui.tabs.tab_biometrics.BiometricsTab._ensure_keyring() enforces, so
+neither interface can be used to bypass throttling the other interface
+would apply.
+
 Invoked either directly (``python biometrics/app.py ...``) or through the
 unified dispatcher (``python cli.py biometrics ...``, which sets ``sys.argv``
 and calls :func:`main`).
@@ -33,12 +42,12 @@ from biometrics.config import settings
 from biometrics.engine import enrollment, modalities, verification
 from biometrics.engine import attachments as attachment_engine
 from biometrics.engine import bulk_attachments
+from biometrics.identity import keyring_access
 from biometrics.identity.identity_record import public_summary
 from biometrics.identity.identity_store import IdentityStore, IdentityStoreError
 from biometrics.reports import report_writer
 from biometrics.samples import sample_generator
 from common.atomic_io import SENSITIVE_FILE_MODE, atomic_write_json, warn_if_permissive
-from crypto.errors import Bsr2IntegrationError
 from crypto.keyring import Keyring
 
 KEYRING_FILE_NAME = "keyring.json"
@@ -97,9 +106,9 @@ def _unlock_keyring(keyring: Keyring) -> bytes:
         return keyring.master_key
     passphrase = getpass.getpass("Biometrics passphrase: ")
     try:
-        return keyring.unlock_with_passphrase(passphrase)
-    except Bsr2IntegrationError as exc:
-        raise AppError(f"unlock failed: {exc}") from exc
+        return keyring_access.unlock_with_passphrase(keyring, _keyring_path(), passphrase)
+    except keyring_access.KeyringAccessError as exc:
+        raise AppError(str(exc)) from exc
 
 
 def _store() -> IdentityStore:

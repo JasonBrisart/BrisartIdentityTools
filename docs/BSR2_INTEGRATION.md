@@ -165,8 +165,32 @@ attacker calling a verify function in a loop against a running process.
 
 Limiter state is **persisted by the caller**, not held in memory. An in-memory
 counter resets whenever the process restarts, which an attacker controls for
-free. The limiter is available as a building block; wiring it into a specific
-unlock path is the responsibility of the tool that owns that path.
+free. Since 1.3.7, `crypto/attempt_store.py` is that persistence adapter, and
+it is wired into both unlock paths that exist in this codebase:
+
+- `vault.store.vault_service.VaultService.unlock()` and
+  `.unlock_with_recovery_code()` persist state as a plain
+  `"unlock_attempts"` field directly inside `vault.json`, checked *before*
+  a `Keyring` is even constructed from the stored wrapper. Both methods
+  share one counter, so alternating between a passphrase guess and a
+  recovery-code guess does not reset an attacker's budget.
+- `biometrics.identity.keyring_access.unlock_with_passphrase()` does the
+  same for the biometrics `keyring.json`, and is the single shared entry
+  point both the CLI (`biometrics/app.py`) and the GUI
+  (`gui/tabs/tab_biometrics.py`) unlock through, so neither interface can
+  be used to bypass the throttling the other enforces.
+
+Defaults (from `crypto.throttle.AttemptLimiter`'s own constructor
+defaults, unchanged by either integration): 5 attempts before lockout,
+exponential backoff starting at 1 second and capping at 300 seconds
+between attempts, and a 900-second (15-minute) lockout once the 5th
+failure is reached.
+
+The identity-bound package flow (`packages/`) is intentionally out of
+scope for this wiring: a package's master key is not a low-entropy human
+passphrase in the same sense a vault or keyring passphrase is, and its
+recipient check (`packages/verification.py`) is already a fast keyed-MAC
+rather than a KDF.
 
 ## Error handling
 
@@ -308,3 +332,13 @@ the ignore entry is kept so no such file could ever be committed by accident).
    does not detect a played-back recording, a wobbled photo, or a mask/deepfake)
    and is uncalibrated against real camera hardware. No other modality has any
    liveness or anti-spoofing check.
+8. **Attempt throttling (1.3.7) is process-local and file-based, not
+   distributed.** The attempt limiter stops a single attacker driving one
+   CLI or GUI process against one vault/keyring file in a loop. It does not
+   protect against an attacker who copies the vault/keyring file elsewhere
+   and resets its `"unlock_attempts"` field by hand -- a local attacker with
+   write access to the file can always do this, since the field is
+   plaintext and unauthenticated, exactly like every other vault-shell or
+   keyring-shell field. It only raises the cost of guessing against a file
+   the attacker cannot freely edit, e.g. one they can only interact with
+   through the CLI/GUI's own unlock prompt.
