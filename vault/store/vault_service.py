@@ -13,6 +13,14 @@ COMMUNICATION RELATIONSHIPS
 - crypto.keyring.Keyring: unwraps the master key on unlock(); held in memory
   for the session so each record operation is fast (one slow KDF per session,
   not per operation -- see docs/BSR2_INTEGRATION.md's "KDF cost" section).
+- crypto.attempt_store: (unlock-throttling security update) unlock() and unlock_with_recovery_code()
+  both consult this before constructing a Keyring at all, and both record a
+  failure or success afterward. State is persisted as a plain
+  "unlock_attempts" field directly inside the vault file itself, read/written
+  in the same load_state()/save_state() calls this module already makes for
+  every other field -- no separate file, no format-version bump. Both unlock
+  methods share the SAME attempt counter, so an attacker cannot reset their
+  budget by switching between a passphrase guess and a recovery-code guess.
 - crypto.envelope (seal_json/open_json for JSON records; seal_bytes/open_bytes
   for raw file records) bound to a crypto.context.record_context, so a
   ciphertext cannot be moved between records without failing authentication.
@@ -47,6 +55,8 @@ KEY DESIGN DECISIONS
 from pathlib import Path
 
 from common.hashing import sha256_bytes
+from crypto.throttle import AttemptLockedOut
+from crypto import attempt_store
 from crypto.context import record_context
 from crypto.envelope import open_bytes, open_json, seal_bytes, seal_json
 from crypto.errors import Bsr2IntegrationError
@@ -98,12 +108,23 @@ class VaultService:
 
     def unlock(self, passphrase: str) -> bytes:
         state = load_state(self.path)
+        try:
+            attempt_store.check_and_get_state(state)
+        except AttemptLockedOut as exc:
+            raise VaultServiceError(
+                "unlock refused: too many recent failed attempts; retry in "
+                f"{exc.retry_after_seconds:.0f} second(s)."
+            ) from exc
         from crypto.keyring import Keyring
         keyring = Keyring(state["keyring"])
         try:
             master_key = keyring.unlock_with_passphrase(passphrase)
         except Bsr2IntegrationError as exc:
+            state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_failure(state)
+            save_state(self.path, state)
             raise VaultServiceError(f"unlock failed: {exc}") from exc
+        state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_success(state)
+        save_state(self.path, state)
         self._keyring = keyring
         self._master_key = master_key
         self._audit("unlocked")
@@ -111,12 +132,23 @@ class VaultService:
 
     def unlock_with_recovery_code(self, recovery_code: str) -> bytes:
         state = load_state(self.path)
+        try:
+            attempt_store.check_and_get_state(state)
+        except AttemptLockedOut as exc:
+            raise VaultServiceError(
+                "unlock refused: too many recent failed attempts; retry in "
+                f"{exc.retry_after_seconds:.0f} second(s)."
+            ) from exc
         from crypto.keyring import Keyring
         keyring = Keyring(state["keyring"])
         try:
             master_key = keyring.unlock_with_recovery_code(recovery_code)
         except Bsr2IntegrationError as exc:
+            state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_failure(state)
+            save_state(self.path, state)
             raise VaultServiceError(f"unlock failed: {exc}") from exc
+        state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_success(state)
+        save_state(self.path, state)
         self._keyring = keyring
         self._master_key = master_key
         self._audit("unlocked")

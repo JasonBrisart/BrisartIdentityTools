@@ -52,8 +52,10 @@ SLOW_TEST_CLASSES = {
     "vault.tests.test_file_records.FileRecordTests",
     "vault.tests.test_batch_upsert.BatchUpsertTests",
     "vault.tests.test_label_normalization.VaultLookupNormalizationTests",
+    "vault.tests.test_unlock_throttle.VaultUnlockThrottleTests",
     "crypto.tests.test_keyring.KeyringUnlockTests",
     "crypto.tests.test_factors.FactorHashKdfRoundTripTests",
+    "biometrics.tests.test_keyring_access.KeyringAccessThrottleTests",
 }
 
 _EXCLUDED_PARTS = {

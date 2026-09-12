@@ -165,8 +165,24 @@ attacker calling a verify function in a loop against a running process.
 
 Limiter state is **persisted by the caller**, not held in memory. An in-memory
 counter resets whenever the process restarts, which an attacker controls for
-free. The limiter is available as a building block; wiring it into a specific
-unlock path is the responsibility of the tool that owns that path.
+free. `crypto/attempt_store.py` is the persistence adapter used by both unlock
+paths in this codebase:
+
+- Vault passphrase and recovery-code unlocks share a plain `"unlock_attempts"`
+  field inside `vault.json`.
+- Biometrics CLI and GUI passphrase unlocks share the same field inside
+  `keyring.json` through `biometrics.identity.keyring_access`.
+
+Both paths check the limiter before constructing or unlocking a `Keyring`. The
+default policy allows five failed attempts, applies exponential backoff from
+one to 300 seconds, and imposes a 15-minute lockout after the fifth failure.
+Successful authentication clears the applicable shared counter.
+
+The limiter is application-layer, process-local, and file-based. A local actor
+with write access to `vault.json` or `keyring.json` can edit or remove the plain
+`"unlock_attempts"` field, just as that actor can modify other unauthenticated
+shell metadata. The limiter therefore constrains ordinary live-interface
+guessing but is not a tamper-proof control against a fully capable local actor.
 
 ## Error handling
 

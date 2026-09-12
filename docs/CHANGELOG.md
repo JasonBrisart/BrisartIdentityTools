@@ -4,6 +4,59 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.9.0] - 2026-09-12
+
+A security-hardening release forward-porting the completed LTS-2028 unlock-throttling patch set into the Current line. This release closes missing application-layer attempt controls in the Vault and Biometrics keyring authentication paths while preserving Main's existing hardware architecture, Integrity Ledger, stored data formats, and dependency model.
+
+The security work originated on the frozen LTS-2028 line, where the shared application architecture was corrected and verified first, then was adapted to Main without importing LTS release numbering or branch-specific history. Main remains the Current development line; the permanent LTS identifiers below are retained solely for cross-branch traceability.
+
+### Security
+
+- **Vault unlock throttling, forward-ported from `LTS-2028-SEC-1` (High).** `VaultService.unlock()` and `VaultService.unlock_with_recovery_code()` now consult the existing `crypto.throttle.AttemptLimiter` through the new `crypto/attempt_store.py` persistence adapter. Passphrase and recovery-code failures share one `"unlock_attempts"` counter inside `vault.json`, so switching credential types does not reset the attempt budget. A caller in an active backoff or lockout period is refused before a `Keyring` is constructed or the slow KDF is run. Failed authentication updates the persisted state; successful authentication clears it.
+
+- **Biometrics keyring unlock throttling, forward-ported from `LTS-2028-SEC-2` (High).** The Biometrics CLI and GUI now route passphrase authentication through the new `biometrics/identity/keyring_access.py` entry point instead of calling `Keyring.unlock_with_passphrase()` independently. Both interfaces therefore enforce the same policy and persist the same `"unlock_attempts"` state inside `keyring.json`; neither interface can be used to bypass backoff or lockout established through the other.
+
+- **Shared policy.** Both components inherit the unchanged `AttemptLimiter` defaults: five failed attempts, exponential backoff from one second to a maximum of 300 seconds, and a 900-second (15-minute) lockout after the fifth failure. This release wires the already-shipped limiter into the applicable unlock paths; it does not modify the limiter or any cryptographic primitive.
+
+### Fixed
+
+- **Shared-counter regression-test correction, forward-ported from `LTS-2028-COR-1` (Low).** The Vault recovery-code test now expires only the temporary `locked_until` gate while preserving `failed_attempts`, then verifies that a successful recovery-code unlock clears the same counter previously incremented by a failed passphrase attempt. The production throttling behavior was correct; the original test incorrectly attempted the recovery-code unlock while the legitimate initial backoff was still active. The corrected test is deterministic and does not use `sleep()`.
+
+### Added
+
+- `crypto/attempt_store.py`: a small, component-neutral persistence adapter for reading, checking, updating, and clearing `AttemptLimiter` state in caller-owned JSON containers.
+- `biometrics/identity/keyring_access.py`: the single throttled Biometrics keyring-unlock entry point shared by the CLI and GUI.
+- `crypto/tests/test_attempt_store.py`: focused coverage for fresh state, stable field naming, failure recording, lockout, successful clearing, shared-counter semantics, default-limiter behavior, and status inspection.
+- `vault/tests/test_unlock_throttle.py`: real-KDF integration coverage for Vault passphrase and recovery-code throttling.
+- `biometrics/tests/test_keyring_access.py`: real-KDF integration coverage for the shared Biometrics keyring-access path and retry messaging.
+
+### Changed
+
+- `vault/store/vault_service.py`: both Vault unlock methods now check persisted attempt state before keyring construction, record failures, and clear state on success. Main-only Integrity Ledger behavior and all non-unlock Vault operations remain unchanged.
+- `biometrics/app.py`: CLI keyring unlocking now uses `biometrics.identity.keyring_access`.
+- `gui/tabs/tab_biometrics.py`: GUI keyring unlocking now uses the same shared access function as the CLI.
+- `tests/run_tests.py`: `VaultUnlockThrottleTests` and `KeyringAccessThrottleTests` are registered as slow real-KDF suites; existing Main test registrations are preserved.
+- `docs/BSR2_INTEGRATION.md`, `crypto/README.md`, `vault/README.md`, and `biometrics/README.md`: documentation now describes the wired application-layer throttling behavior and its residual limits instead of presenting `AttemptLimiter` only as an available building block.
+
+### Verification
+
+- Confirmed that every Python file in the complete 1.9.0 working tree parses and compiles successfully.
+- Confirmed all eight `crypto.tests.test_attempt_store` tests pass.
+- Confirmed by syntax-tree inspection that the Biometrics CLI and GUI call only `keyring_access.unlock_with_passphrase()` and retain no direct keyring passphrase-unlock bypass.
+- Confirmed both Vault unlock paths contain limiter checks, failure recording, and successful-state clearing.
+- Confirmed the corrected Vault shared-counter test preserves `failed_attempts` while expiring only `locked_until`.
+- Confirmed both new real-KDF test classes are registered in the slow test set.
+
+### Compatibility and residual risk
+
+- No existing Vault, identity, keyring, biometric-template, attachment, package, custody-chain, hardware, or Integrity Ledger format is broken. The only persisted addition is the optional plain `"unlock_attempts"` field inside the applicable Vault or keyring container. Existing files load unchanged and begin with fresh attempt state.
+- No migration is required.
+- No BSR2 primitive or cryptographic envelope behavior changed. This is application-layer attempt throttling only.
+- The limiter state is file-based and unauthenticated. A local actor with write access to `vault.json` or `keyring.json` can edit or remove the plain `"unlock_attempts"` field. The control constrains ordinary live-interface guessing but is not a tamper-proof defense against a fully capable local actor.
+- No new external dependencies were introduced. Main remains pure Python and standard-library only outside its deliberately optional, caller-supplied hardware bindings and transports.
+
+---
+
 ### [1.8.0] - 2026-09-12
 
 Extends `hardware/` (introduced in 1.7.0) with fingerprint-scanner
