@@ -4,6 +4,51 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.9.1] - 2026-09-12
+
+A test-correctness follow-up to 1.9.0.
+
+The unlock-throttling implementation forward-ported from
+LTS-2028-SEC-1 and LTS-2028-SEC-2 remained correct. However, the
+shared-counter Vault regression test inherited an incomplete correction
+from LTS-2028-COR-1.
+
+Version 1.9.0's regression test attempted to expire the ordinary
+backoff window by resetting `locked_until` to `0.0`. This was
+incorrect. `locked_until` represents the full lockout imposed after the
+maximum failed-attempt threshold is reached; ordinary exponential
+backoff is calculated using `failed_attempts` and `last_failure_at`.
+
+### Fixed
+
+**Forward-port of `LTS-2028-COR-2` (Low)**
+
+`vault/tests/test_unlock_throttle.py` now preserves
+`failed_attempts == 1` while setting `last_failure_at` to `0.0`,
+making the recorded failure old enough that the ordinary backoff
+interval has elapsed while keeping the shared counter intact.
+
+The corrected test verifies that:
+
+1. A failed passphrase increments the shared persisted counter.
+2. The recovery-code path observes the same persisted state.
+3. Expiring the ordinary backoff interval does not reset the counter.
+4. A valid recovery-code unlock succeeds after the interval has elapsed.
+5. Successful recovery-code authentication clears the shared state.
+
+### Verification
+
+The corrected test was validated through the real-KDF slow suite:
+
+```text
+PASS  ran 46 test(s)
+
+Ran 46 tests in 6258.102s
+
+OK
+```
+---
+
 ## [1.9.0] - 2026-09-12
 
 A security-hardening release forward-porting the completed LTS-2028 unlock-throttling patch set into the Current line. This release closes missing application-layer attempt controls in the Vault and Biometrics keyring authentication paths while preserving Main's existing hardware architecture, Integrity Ledger, stored data formats, and dependency model.
