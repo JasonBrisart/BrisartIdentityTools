@@ -21,7 +21,6 @@ run separately:
     python tests/run_tests.py --slow     ONLY the slow real-KDF tests
     python tests/run_tests.py --fast -v  verbose
 """
-
 import argparse
 import sys
 import unittest
@@ -52,8 +51,10 @@ SLOW_TEST_CLASSES = {
     "vault.tests.test_file_records.FileRecordTests",
     "vault.tests.test_batch_upsert.BatchUpsertTests",
     "vault.tests.test_label_normalization.VaultLookupNormalizationTests",
+    "vault.tests.test_unlock_throttle.VaultUnlockThrottleTests",
     "crypto.tests.test_keyring.KeyringUnlockTests",
     "crypto.tests.test_factors.FactorHashKdfRoundTripTests",
+    "biometrics.tests.test_keyring_access.KeyringAccessThrottleTests",
 }
 
 _EXCLUDED_PARTS = {
@@ -112,6 +113,7 @@ def main():
     selection.add_argument("--slow", action="store_true", help="run ONLY the slow real-KDF tests.")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
+
     mode = "fast" if args.fast else "slow" if args.slow else "all"
     suite = build_suite(mode)
     result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1).run(suite)

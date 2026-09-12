@@ -4,6 +4,149 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.7] - 2026-09-12 — LTS-2028 Security Update
+
+Two independent security fixes, each isolated to the specific component it
+closes a gap in. Per LTS-2028 policy, both are security/correctness fixes
+applied without altering the frozen architecture: no new dependencies, no
+hardware/device integration, no new user-facing capability. Each fix below
+is a self-contained unit — read, reviewed, and (if ever needed) reverted
+independently of the other.
+
+Both fixes wire an existing, already-shipped primitive
+(`crypto/throttle.py`'s `AttemptLimiter`, present since 0.8.0-beta) into a
+call path that never used it. Neither fix modifies `AttemptLimiter` itself
+or any cryptographic primitive; both add a thin, component-local
+persistence adapter and two call sites.
+
+---
+
+### Fix 1 of 2 — Vault unlock throttling
+
+| | |
+|---|---|
+| **ID** | LTS-2028-SEC-1 |
+| **Severity** | High |
+| **Component** | `vault/` |
+| **Affected versions** | 1.3.0 – 1.3.6 (all LTS-2028 releases prior to this one) |
+| **Files changed** | `vault/store/vault_service.py` (modified); `crypto/attempt_store.py` (new); `vault/tests/test_unlock_throttle.py` (new); `crypto/tests/test_attempt_store.py` (new) |
+
+**Gap.** `VaultService.unlock()` and `.unlock_with_recovery_code()` never
+consulted `crypto.throttle.AttemptLimiter`. BSR2's slow KDF
+(`crypto/factors.py`) makes each *offline* guess against a stolen
+`vault.json` expensive, but a caller driving either unlock method in a loop
+against a running process paid no additional cost — no backoff, no
+lockout, no record of prior failures. This gap was previously
+acknowledged, not hidden: `crypto/README.md` and `docs/BSR2_INTEGRATION.md`
+both stated the limiter was "available as a building block" but not wired
+into any specific unlock path.
+
+**Fix.** `crypto/attempt_store.py` is a new, minimal adapter that persists
+`AttemptLimiter` state as a plain `"unlock_attempts"` field directly inside
+`vault.json` — an additive field; no format-version bump, no migration
+step, and a 1.3.6-or-earlier vault file loads unchanged and simply starts
+with fresh attempt state the first time it's opened under 1.3.7. Both
+`unlock()` and `unlock_with_recovery_code()` in `vault/store/vault_service.py`
+now check this state *before* constructing a `Keyring` from the stored
+wrapper at all, so an exhausted caller is refused immediately without
+paying the KDF cost. Both methods read/write the *same* field, so
+alternating between a passphrase guess and a recovery-code guess does not
+reset the attempt budget. Defaults, unchanged from `AttemptLimiter`'s own
+constructor: 5 attempts, exponential backoff 1s→300s between attempts, and
+a 900s (15-minute) lockout after the 5th failure.
+
+**Verification.** `vault/tests/test_unlock_throttle.py` confirms: a
+locked-out vault refuses an unlock attempt before any KDF runs; a wrong
+passphrase records exactly one failure; a correct unlock clears recorded
+failures; a recovery-code unlock clears a counter a prior passphrase
+failure had incremented. `crypto/tests/test_attempt_store.py` covers the
+adapter itself (fresh/locked-out/cleared state, shared-counter design)
+against a fake clock, independent of any real KDF cost.
+
+**Out of scope for this fix.** The identity-bound package flow
+(`packages/`) is unaffected — a package's master key is not a low-entropy
+human passphrase, and its recipient check is already a fast keyed-MAC
+rather than a KDF (`packages/verification.py`).
+
+---
+
+### Fix 2 of 2 — Biometrics keyring unlock throttling (CLI + GUI)
+
+| | |
+|---|---|
+| **ID** | LTS-2028-SEC-2 |
+| **Severity** | High |
+| **Component** | `biometrics/`, `gui/` |
+| **Affected versions** | 1.3.0 – 1.3.6 (all LTS-2028 releases prior to this one) |
+| **Files changed** | `biometrics/app.py` (modified); `gui/tabs/tab_biometrics.py` (modified); `biometrics/identity/keyring_access.py` (new); `biometrics/tests/test_keyring_access.py` (new) |
+
+**Gap.** Identical root cause to Fix 1, but in the biometrics keyring path,
+with an additional wrinkle: `biometrics/app.py`'s CLI
+(`_unlock_keyring()`) called `Keyring.unlock_with_passphrase()` directly
+with no throttling, and `gui/tabs/tab_biometrics.py`'s GUI
+(`_ensure_keyring()`) did the same *independently* — so even if one
+interface had been throttled, the other would not have been. Both
+interfaces were fully unthrottled prior to this fix.
+
+**Fix.** `biometrics/identity/keyring_access.py` is a new module providing
+one shared entry point, `unlock_with_passphrase()`, built on the same
+`crypto.attempt_store` adapter from Fix 1 (persisting state as the same
+`"unlock_attempts"` field, this time inside `keyring.json`). Both
+`biometrics/app.py`'s `_unlock_keyring()` and
+`gui/tabs/tab_biometrics.py`'s `_ensure_keyring()` now call this one
+function instead of touching `Keyring.unlock_with_passphrase()` directly,
+so the CLI and GUI enforce the identical policy and neither can be used to
+bypass throttling the other applies. Same defaults as Fix 1 (5 attempts,
+1s→300s backoff, 15-minute lockout), inherited from the same
+`AttemptLimiter` and the same `crypto.attempt_store` adapter — no separate
+policy to keep in sync.
+
+**Verification.** `biometrics/tests/test_keyring_access.py` mirrors
+`test_unlock_throttle.py`'s coverage for this path: locked-out refusal
+before any KDF runs, a wrong passphrase recording one failure, a correct
+unlock clearing recorded failures, and the wrapped error message
+propagating a human-readable retry-after time.
+
+---
+
+### Supporting changes (both fixes)
+
+- `tests/run_tests.py`: `VaultUnlockThrottleTests` and
+  `KeyringAccessThrottleTests` (both real-KDF, ~1 additional minute each)
+  are added to `SLOW_TEST_CLASSES`, so `--fast` continues to skip them and
+  `--slow` (or a full run) continues to exercise them.
+- `docs/BSR2_INTEGRATION.md`, `crypto/README.md`, `vault/README.md`,
+  `biometrics/README.md`: updated to describe the now-wired attempt
+  limiter instead of an unwired building block. See
+  `docs/DOC_UPDATES_FOR_1.3.7.md` for the exact old→new text.
+- `version.py`: bumped to `1.3.7`.
+
+### Notes (both fixes)
+
+- No stored vault, identity, keyring, biometric-template, attachment,
+  package, or custody-chain *format* changed in a way that breaks
+  compatibility; the only on-disk change is the additive
+  `"unlock_attempts"` field described above.
+- Both fixes remediate a *documented design gap*, not a silently-discovered
+  defect — see each fix's "Gap" section above.
+- This is application-layer throttling only. Neither fix changes or
+  strengthens BSR2's own cryptography; every wrapped master key and sealed
+  payload is exactly as protected as it was in 1.3.6. Standing caveats are
+  unchanged and still apply in full: BSR2 is unreviewed research
+  cryptography (`docs/BSR2_INTEGRATION.md`), the package custody chain is
+  tamper-evident rather than a digital signature, and the video liveness
+  gate remains a motion-presence check rather than general anti-spoofing
+  (KI-001). A residual-risk note has been added to
+  `docs/BSR2_INTEGRATION.md`: this throttling is process-local and
+  file-based — a local attacker with write access to a vault/keyring file
+  can hand-edit its plaintext `"unlock_attempts"` field, exactly as they
+  already could with any other unauthenticated shell field in either file.
+- Zero new external dependencies in either fix; both remain pure Python,
+  standard-library only, consistent with the LTS-2028 dependency-free
+  guarantee.
+
+---
+
 ## [1.3.6] - 2026-09-11
 
 A security-hardening and bug-fix patch continuing the untrusted-input

@@ -16,6 +16,14 @@ COMMUNICATION RELATIONSHIPS
 - crypto.envelope (seal_json/open_json for JSON records; seal_bytes/open_bytes
   for raw file records) bound to a crypto.context.record_context, so a
   ciphertext cannot be moved between records without failing authentication.
+- crypto.attempt_store: (since 1.3.7) unlock() and unlock_with_recovery_code()
+  both consult this before constructing a Keyring at all, and both record a
+  failure or success afterward. State is persisted as a plain
+  "unlock_attempts" field directly inside the vault file itself, read/written
+  in the same load_state()/save_state() calls this module already makes for
+  every other field -- no separate file, no format-version bump. Both unlock
+  methods share the SAME attempt counter, so an attacker cannot reset their
+  budget by switching between a passphrase guess and a recovery-code guess.
 - vault.store.vault_file: all persistence; writes go through it atomically and
   with owner-only (0600) permissions since the file holds the wrapped key.
 - vault.records.record_model: validate_record / new_record / replace_payload /
@@ -40,6 +48,10 @@ KEY DESIGN DECISIONS
 - batch_upsert validates every item *before* mutating the in-memory records
   map, so a bad item in the batch fails the whole batch without partially
   committing (the all-or-nothing contract its tests pin).
+- Attempt-throttle state (since 1.3.7) is checked BEFORE a Keyring is even
+  constructed from the stored wrapper, so a locked-out caller is refused
+  immediately without paying BSR2's slow KDF cost at all -- refusal is cheap
+  even though a genuine unlock attempt is deliberately expensive.
 - Authentication failures from the crypto layer are re-raised as
   VaultServiceError with the record id named, so callers catch one exception
   family and never a vendor exception type.
@@ -47,10 +59,12 @@ KEY DESIGN DECISIONS
 from pathlib import Path
 
 from common.hashing import sha256_bytes
+from crypto import attempt_store
 from crypto.context import record_context
 from crypto.envelope import open_bytes, open_json, seal_bytes, seal_json
 from crypto.errors import Bsr2IntegrationError
 from crypto.rng import new_generator
+from crypto.throttle import AttemptLockedOut
 from vault.core.ids import new_record_id, validate_record_id
 from vault.core.time_tools import stamp_new_record, stamp_updated
 from vault.records.record_model import (
@@ -58,7 +72,7 @@ from vault.records.record_model import (
 )
 from vault.reports import audit_log
 from vault.store.vault_file import (
-    create_vault_file, load_records, load_state, save_keyring, save_records,
+    create_vault_file, load_records, load_state, save_keyring, save_records, save_state,
 )
 
 # The vault record "kind" reserved for arbitrary raw-file payloads created by
@@ -98,12 +112,23 @@ class VaultService:
 
     def unlock(self, passphrase: str) -> bytes:
         state = load_state(self.path)
+        try:
+            attempt_store.check_and_get_state(state)
+        except AttemptLockedOut as exc:
+            raise VaultServiceError(
+                "unlock refused: too many recent failed attempts; retry in "
+                f"{exc.retry_after_seconds:.0f} second(s)."
+            ) from exc
         from crypto.keyring import Keyring
         keyring = Keyring(state["keyring"])
         try:
             master_key = keyring.unlock_with_passphrase(passphrase)
         except Bsr2IntegrationError as exc:
+            state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_failure(state)
+            save_state(self.path, state)
             raise VaultServiceError(f"unlock failed: {exc}") from exc
+        state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_success(state)
+        save_state(self.path, state)
         self._keyring = keyring
         self._master_key = master_key
         self._audit("unlocked")
@@ -111,12 +136,23 @@ class VaultService:
 
     def unlock_with_recovery_code(self, recovery_code: str) -> bytes:
         state = load_state(self.path)
+        try:
+            attempt_store.check_and_get_state(state)
+        except AttemptLockedOut as exc:
+            raise VaultServiceError(
+                "unlock refused: too many recent failed attempts; retry in "
+                f"{exc.retry_after_seconds:.0f} second(s)."
+            ) from exc
         from crypto.keyring import Keyring
         keyring = Keyring(state["keyring"])
         try:
             master_key = keyring.unlock_with_recovery_code(recovery_code)
         except Bsr2IntegrationError as exc:
+            state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_failure(state)
+            save_state(self.path, state)
             raise VaultServiceError(f"unlock failed: {exc}") from exc
+        state[attempt_store.ATTEMPT_STATE_FIELD] = attempt_store.record_success(state)
+        save_state(self.path, state)
         self._keyring = keyring
         self._master_key = master_key
         self._audit("unlocked")
@@ -215,13 +251,7 @@ class VaultService:
         a larger construct -- e.g. BulkFileService's chunked bundle
         chunks -- should pass a distinct kind (BUNDLE_CHUNK_KIND) so those
         internal records can be told apart from a real standalone
-        single-file record later (see BUG FIX note in
-        vault.store.bulk_file_service.upsert_large_bytes: chunks and
-        standalone files used to be indistinguishable, which both cluttered
-        the "Files / Folders / Drives" GUI list with raw internal chunk
-        records and made the GUI's "Decrypt / Restore Selected" button
-        always assume every "file"-kind record was a JSON manifest bundle,
-        crashing on a genuinely standalone file).
+        single-file record later.
 
         `original_filename` is stored in the clear as a normal, non-secret
         field on the record (vault record shells -- label, kind, timestamps

@@ -1,7 +1,15 @@
 """The Biometrics tab: create/unlock the keyring, enroll/verify/inspect/delete
 identities, and attach/extract arbitrary files, folders, or drives to/from an
-identity (chunked transparently past BSR2's single-envelope size limit)."""
+identity (chunked transparently past BSR2's single-envelope size limit).
 
+UNLOCK THROTTLING (since 1.3.7): the "Unlock / Create Keyring" button's
+unlock branch now goes through biometrics.identity.keyring_access instead of
+calling crypto.keyring.Keyring.unlock_with_passphrase() directly. Before this
+change, the GUI enforced no attempt throttling at all, independent of
+whatever biometrics/app.py's CLI did on the same keyring.json -- an attacker
+with GUI access had unlimited passphrase guesses even after the CLI path was
+throttled. Both interfaces now enforce the identical policy.
+"""
 import json
 import tkinter as tk
 from pathlib import Path
@@ -11,12 +19,12 @@ from gui.core.constants import APP_TITLE
 from gui.core.busy import run_in_background
 from gui.widgets.dialogs import ModalityPathDialog, TextPromptDialog, TextViewDialog
 from gui.widgets.path_panel import PathSelectionPanel
-
 from biometrics.config import settings as biometrics_settings
 from biometrics.engine import enrollment as bio_enrollment
 from biometrics.engine import verification as bio_verification
 from biometrics.engine import attachments as bio_attachment_engine
 from biometrics.engine import bulk_attachments as bio_bulk_attachments
+from biometrics.identity import keyring_access
 from biometrics.identity.identity_record import public_summary as bio_public_summary
 from biometrics.identity.identity_store import IdentityStore, IdentityStoreError
 from biometrics.samples import sample_generator
@@ -58,6 +66,7 @@ class BiometricsTab(ttk.Frame):
         ttk.Button(actions, text="Make Samples...", command=self._make_samples).pack(side="left", padx=4)
         self._status_label = ttk.Label(actions, text="locked")
         self._status_label.pack(side="right")
+
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
         self._build_identities_subtab(notebook)
@@ -66,6 +75,7 @@ class BiometricsTab(ttk.Frame):
     def _build_identities_subtab(self, notebook):
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="Identities")
+
         columns = ("identity_id", "label", "modalities")
         self.tree = ttk.Treeview(tab, columns=columns, show="headings", selectmode="browse")
         for col, width in zip(columns, (160, 220, 220)):
@@ -73,6 +83,7 @@ class BiometricsTab(ttk.Frame):
             self.tree.column(col, width=width)
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Double-1>", lambda _e: self._inspect_selected())
+
         record_actions = ttk.Frame(tab)
         record_actions.pack(fill="x", pady=(8, 0))
         ttk.Button(record_actions, text="Enroll...", command=self._enroll).pack(side="left")
@@ -83,6 +94,7 @@ class BiometricsTab(ttk.Frame):
     def _build_attachments_subtab(self, notebook):
         tab = ttk.Frame(notebook, padding=8)
         notebook.add(tab, text="File Attachments")
+
         ttk.Label(
             tab,
             text="Attach ANY combination of files, folders, or whole drives to the "
@@ -90,6 +102,7 @@ class BiometricsTab(ttk.Frame):
                  "any size (large content is chunked automatically).",
             foreground="#555", wraplength=620, justify="left",
         ).pack(anchor="w", pady=(0, 6))
+
         target_row = ttk.Frame(tab)
         target_row.pack(fill="x", pady=(0, 6))
         ttk.Label(target_row, text="Target identity:").pack(side="left")
@@ -98,8 +111,10 @@ class BiometricsTab(ttk.Frame):
             side="left", padx=(6, 0))
         ttk.Label(target_row, text="(defaults to the identity selected above)",
                   foreground="#777").pack(side="left", padx=(6, 0))
+
         self.attach_selection_panel = PathSelectionPanel(tab)
         self.attach_selection_panel.pack(fill="both", expand=True, pady=(0, 8))
+
         attach_row = ttk.Frame(tab)
         attach_row.pack(fill="x", pady=(0, 8))
         ttk.Label(attach_row, text="Bundle name:").pack(side="left")
@@ -107,7 +122,9 @@ class BiometricsTab(ttk.Frame):
         ttk.Entry(attach_row, textvariable=self._attach_bundle_name_var, width=30).pack(
             side="left", padx=(6, 8))
         ttk.Button(attach_row, text="Attach Selected", command=self._attach_selected_paths).pack(side="left")
+
         ttk.Separator(tab, orient="horizontal").pack(fill="x", pady=8)
+
         ttk.Label(tab, text="Attachments on the selected identity:").pack(anchor="w")
         columns = ("filename", "size_bytes")
         self.attachment_tree = ttk.Treeview(tab, columns=columns, show="headings",
@@ -116,6 +133,7 @@ class BiometricsTab(ttk.Frame):
             self.attachment_tree.heading(col, text=col.replace("_", " ").title())
             self.attachment_tree.column(col, width=width)
         self.attachment_tree.pack(fill="both", expand=True, pady=(4, 8))
+
         restore_row = ttk.Frame(tab)
         restore_row.pack(fill="x")
         ttk.Button(restore_row, text="Refresh", command=self._refresh_attachment_list).pack(side="left")
@@ -139,7 +157,7 @@ class BiometricsTab(ttk.Frame):
             passphrase = prompt.result["passphrase"]
 
             def work():
-                keyring.unlock_with_passphrase(passphrase)
+                keyring_access.unlock_with_passphrase(keyring, path, passphrase)
                 return keyring
 
             def on_success(unlocked_keyring):
@@ -149,7 +167,6 @@ class BiometricsTab(ttk.Frame):
 
             def on_error(exc):
                 messagebox.showerror(APP_TITLE, f"Unlock failed: {exc}", parent=self)
-
             run_in_background(self, work, on_success, on_error, "Unlocking (slow key derivation)...")
         else:
             prompt = TextPromptDialog(
@@ -181,7 +198,6 @@ class BiometricsTab(ttk.Frame):
 
             def on_error(exc):
                 messagebox.showerror(APP_TITLE, f"Could not create keyring: {exc}", parent=self)
-
             run_in_background(self, work, on_success, on_error, "Creating keyring (slow key derivation)...")
 
     def _lock(self):
@@ -283,7 +299,6 @@ class BiometricsTab(ttk.Frame):
 
         def on_error(exc):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
-
         run_in_background(self, work, on_success, on_error, "Enrolling (sealing templates)...")
 
     def _verify(self):
@@ -334,7 +349,6 @@ class BiometricsTab(ttk.Frame):
 
         def on_error(exc):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
-
         run_in_background(self, work, on_success, on_error, "Verifying...")
 
     def _make_samples(self):
@@ -359,7 +373,6 @@ class BiometricsTab(ttk.Frame):
 
         def on_error(exc):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
-
         run_in_background(self, work, on_success, on_error, "Generating samples...")
 
     # -- generic file/folder/drive attachments -- #
@@ -436,7 +449,6 @@ class BiometricsTab(ttk.Frame):
 
         def on_error(exc):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
-
         run_in_background(
             self, work, on_success, on_error,
             f"Zipping and attaching {len(paths)} item(s)...",
@@ -487,7 +499,6 @@ class BiometricsTab(ttk.Frame):
 
         def on_error(exc):
             messagebox.showerror(APP_TITLE, str(exc), parent=self)
-
         run_in_background(self, work, on_success, on_error, "Decrypting attachment...")
 
     def _remove_selected_attachment(self):
