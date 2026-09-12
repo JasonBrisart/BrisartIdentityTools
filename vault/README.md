@@ -111,6 +111,14 @@ twice that. That is the KDF working as intended, not a hang.
 Key wrapping is what makes this workable. One derivation unwraps the master key,
 and every record operation after that is fast.
 
+Since LTS-2028-SEC-1 (forward-ported to main in 1.9.0), repeated failed unlock attempts (via either the passphrase
+or the recovery code) are throttled: after 5 failures the vault refuses
+further attempts with an exponential backoff, capping at a 15-minute
+lockout. This state lives in a plain `"unlock_attempts"` field inside
+`vault.json` itself (see `crypto/attempt_store.py`), and a caller who has
+exhausted the budget is refused immediately -- before the slow KDF even
+runs.
+
 ### Recovery
 
 `init` prints a recovery code **once**: 40 characters of Crockford base32, 200
@@ -223,3 +231,4 @@ it should not be used as the sole protection for credentials, identity records,
 or recovery secrets, and that caveat is inherited here rather than softened. The
 full threat model, including what this encryption does not protect against, is
 in [docs/BSR2_INTEGRATION.md](../docs/BSR2_INTEGRATION.md).
+

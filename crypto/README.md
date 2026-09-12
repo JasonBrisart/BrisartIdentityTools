@@ -26,6 +26,7 @@ for that document.
 | `factors.py` | Factor protection split by input entropy — `hash_factor`/`verify_factor` (slow KDF, for passphrases and spoken phrases) versus `bind_factor`/`verify_bound_factor` (fast keyed MAC, for template digests and device ids). Also bounds KDF iteration counts above *and* below the sane range, so a tampered stored value can't force a cheap derivation or a years-long one. |
 | `rng.py` | `ManagedGenerator` / `new_generator`: seeds the vendored DRBG from `secrets.token_bytes` and transparently reseeds before upstream's own request/byte lifecycle limits, so a long-lived process doesn't crash mid-run. |
 | `throttle.py` | `AttemptLimiter`: exponential-backoff + lockout for *online* guessing against a running process, on top of what the slow KDF already does for *offline* guessing. State is caller-persisted, not held in memory. |
+| `attempt_store.py` | (LTS-2028-SEC-1/SEC-2, forward-ported to main in 1.9.0) The persistence adapter that actually wires `AttemptLimiter` into a stored container -- reads/writes a plain `"unlock_attempts"` field on whatever JSON dict a caller already has open (`vault.json`, biometrics `keyring.json`), so `vault/store/vault_service.py` and `biometrics/identity/keyring_access.py` persist throttle state the same way without sharing any other code. |
 
 ---
 
@@ -48,3 +49,9 @@ reduces the ways *this code* can misuse BSR2. None of it increases confidence
 in BSR2 itself. BSR2's own `SECURITY.md` says it should not be the sole
 protection for credentials, identity records, or recovery secrets, and that
 caveat is inherited here without softening.
+
+As of LTS-2028-SEC-1/SEC-2 (forward-ported to main in 1.9.0), `attempt_store.py`
+closes the previously open item of actually wiring `AttemptLimiter` into a real
+unlock path; see `docs/BSR2_INTEGRATION.md`'s Attempt limiting section for
+specifics.
+

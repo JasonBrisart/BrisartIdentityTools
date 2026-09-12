@@ -129,6 +129,13 @@ permission bits are not meaningfully enforceable there). This is filesystem
 defense-in-depth; BSR2's own encryption is what actually protects the wrapped
 key inside.
 
+Since LTS-2028-SEC-2 (forward-ported to main in 1.9.0), repeated failed unlock attempts against the biometrics
+keyring are throttled identically to the vault's own throttling (5
+attempts, exponential backoff, a 15-minute lockout), via
+`biometrics/identity/keyring_access.py`. Both the CLI and the GUI unlock
+through this same module, so neither interface can be used to bypass the
+throttling the other enforces.
+
 A separate, weaker **device binding** (`biometrics/identity/device_key.py`)
 records a keyed-MAC of machine-specific fingerprint material (hostname,
 platform, MAC address) under the master key, as one more thing an attacker
@@ -177,7 +184,8 @@ biometrics/
 ├── identity/
 │   ├── device_key.py            weak machine-fingerprint binding (defense in depth only)
 │   ├── identity_record.py       record shape/validation, no file I/O
-│   └── identity_store.py        one JSON file per identity, atomic writes
+│   ├── identity_store.py        one JSON file per identity, atomic writes
+│   └── keyring_access.py        shared, attempt-throttled keyring unlock (LTS-2028-SEC-2, fwd-ported 1.9.0; CLI + GUI)
 ├── reports/
 │   └── report_writer.py         append-only enrollment/verification audit reports
 ├── samples/
@@ -195,3 +203,4 @@ only and is uncalibrated against real cameras; no other modality has any
 liveness or anti-spoofing check, and a recording or synthetic sample that
 reproduces the feature vector closely enough will still verify. Do not treat
 this as a production biometric authentication system.
+

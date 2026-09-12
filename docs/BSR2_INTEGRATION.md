@@ -165,24 +165,33 @@ attacker calling a verify function in a loop against a running process.
 
 Limiter state is **persisted by the caller**, not held in memory. An in-memory
 counter resets whenever the process restarts, which an attacker controls for
-free. `crypto/attempt_store.py` is the persistence adapter used by both unlock
-paths in this codebase:
+free. Since LTS-2028-SEC-1/SEC-2 (forward-ported to main in 1.9.0),
+`crypto/attempt_store.py` is that persistence adapter, and
+it is wired into both unlock paths that exist in this codebase:
 
-- Vault passphrase and recovery-code unlocks share a plain `"unlock_attempts"`
-  field inside `vault.json`.
-- Biometrics CLI and GUI passphrase unlocks share the same field inside
-  `keyring.json` through `biometrics.identity.keyring_access`.
+- `vault.store.vault_service.VaultService.unlock()` and
+  `.unlock_with_recovery_code()` persist state as a plain
+  `"unlock_attempts"` field directly inside `vault.json`, checked *before*
+  a `Keyring` is even constructed from the stored wrapper. Both methods
+  share one counter, so alternating between a passphrase guess and a
+  recovery-code guess does not reset an attacker's budget.
+- `biometrics.identity.keyring_access.unlock_with_passphrase()` does the
+  same for the biometrics `keyring.json`, and is the single shared entry
+  point both the CLI (`biometrics/app.py`) and the GUI
+  (`gui/tabs/tab_biometrics.py`) unlock through, so neither interface can
+  be used to bypass the throttling the other enforces.
 
-Both paths check the limiter before constructing or unlocking a `Keyring`. The
-default policy allows five failed attempts, applies exponential backoff from
-one to 300 seconds, and imposes a 15-minute lockout after the fifth failure.
-Successful authentication clears the applicable shared counter.
+Defaults (from `crypto.throttle.AttemptLimiter`'s own constructor
+defaults, unchanged by either integration): 5 attempts before lockout,
+exponential backoff starting at 1 second and capping at 300 seconds
+between attempts, and a 900-second (15-minute) lockout once the 5th
+failure is reached.
 
-The limiter is application-layer, process-local, and file-based. A local actor
-with write access to `vault.json` or `keyring.json` can edit or remove the plain
-`"unlock_attempts"` field, just as that actor can modify other unauthenticated
-shell metadata. The limiter therefore constrains ordinary live-interface
-guessing but is not a tamper-proof control against a fully capable local actor.
+The identity-bound package flow (`packages/`) is intentionally out of
+scope for this wiring: a package's master key is not a low-entropy human
+passphrase in the same sense a vault or keyring passphrase is, and its
+recipient check (`packages/verification.py`) is already a fast keyed-MAC
+rather than a KDF.
 
 ## Error handling
 
@@ -324,3 +333,15 @@ the ignore entry is kept so no such file could ever be committed by accident).
    does not detect a played-back recording, a wobbled photo, or a mask/deepfake)
    and is uncalibrated against real camera hardware. No other modality has any
    liveness or anti-spoofing check.
+8. **Attempt throttling (LTS-2028-SEC-1/SEC-2, forward-ported to main in
+   1.9.0) is process-local and file-based, not
+   distributed.** The attempt limiter stops a single attacker driving one
+   CLI or GUI process against one vault/keyring file in a loop. It does not
+   protect against an attacker who copies the vault/keyring file elsewhere
+   and resets its `"unlock_attempts"` field by hand -- a local attacker with
+   write access to the file can always do this, since the field is
+   plaintext and unauthenticated, exactly like every other vault-shell or
+   keyring-shell field. It only raises the cost of guessing against a file
+   the attacker cannot freely edit, e.g. one they can only interact with
+   through the CLI/GUI's own unlock prompt.
+
