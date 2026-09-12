@@ -79,10 +79,14 @@ class VaultUnlockThrottleTests(unittest.TestCase):
         state = load_state(self.vault_path)
         self.assertEqual(state[attempt_store.ATTEMPT_STATE_FIELD]["failed_attempts"], 1)
 
-        # The failure correctly starts a one-second backoff. Expire only that
-        # time gate before trying the recovery code; preserve failed_attempts
-        # so this test still proves both credential paths share one counter.
-        state[attempt_store.ATTEMPT_STATE_FIELD]["locked_until"] = 0.0
+        # The first failure starts an ordinary one-second backoff calculated
+        # from last_failure_at, not a full lockout represented by locked_until.
+        # Make the recorded failure old enough for that backoff to have elapsed
+        # while preserving failed_attempts, so this test still proves that both
+        # credential paths share one counter.
+        attempt_state = state[attempt_store.ATTEMPT_STATE_FIELD]
+        attempt_state["last_failure_at"] = 0.0
+        attempt_state["locked_until"] = 0.0
         save_state(self.vault_path, state)
 
         service_2 = VaultService(self.vault_path)

@@ -4,7 +4,61 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+## [1.3.9] - 2026-09-12 — LTS-2028 Test-Correctness Follow-Up
+
+A narrowly scoped test-correctness follow-up to 1.3.8. The production unlock-throttling implementation introduced in 1.3.7 remains unchanged and continues to behave correctly.
+
+Version 1.3.8 correctly identified the slow-suite failure as an incorrect regression-test expectation, but its attempted correction expired the wrong limiter-state field. This release corrects that mistake and supersedes the incomplete test adjustment documented in 1.3.8.
+
+Per LTS-2028 policy, this release makes no changes to production application behavior, cryptographic primitives, authentication policy, stored formats, hardware or device integration, or external dependencies.
+
+### Fix 1 of 1 — Correct ordinary-backoff expiry in shared-counter test
+
+| Field | Details |
+|---|---|
+| **ID** | `LTS-2028-COR-2` |
+| **Severity** | Low |
+| **Component** | `vault/tests/` |
+| **Affected versions** | 1.3.8 |
+| **Files changed** | `vault/tests/test_unlock_throttle.py`; `version.py`; `docs/CHANGELOG.md` |
+
+**Gap.** Version 1.3.8 attempted to correct `test_recovery_code_unlock_shares_the_same_counter_as_passphrase` by setting the persisted limiter state's `locked_until` field to `0.0` before performing a valid recovery-code unlock.
+
+That did not expire the ordinary one-second backoff created by the first failed passphrase attempt. `AttemptLimiter` represents ordinary exponential backoff using `failed_attempts` and `last_failure_at`; `locked_until` represents only the full lockout imposed after the maximum failed-attempt threshold is reached. After one failed attempt, `locked_until` was already `0.0`, so the 1.3.8 adjustment had no effect. The recovery-code path correctly observed the recent `last_failure_at` value and refused the attempt before running the KDF.
+
+The repeated CI failure was therefore another legitimate backoff refusal. It did not indicate a bypass, counter-sharing defect, recovery-code defect, or failure in the production throttling implementation.
+
+**Fix.** The regression test now preserves `failed_attempts == 1` while setting `last_failure_at` to `0.0`, making the recorded failure old enough that the ordinary exponential-backoff interval has elapsed. `locked_until` remains `0.0`, confirming that no full lockout is active.
+
+The test then performs a valid recovery-code unlock and confirms that successful authentication clears the same persisted attempt counter previously incremented by the failed passphrase attempt.
+
+The corrected sequence verifies that:
+
+1. One invalid passphrase increments the shared persisted counter.
+2. The immediate recovery-code path is subject to the same attempt state.
+3. Preserving `failed_attempts` while moving `last_failure_at` into the past expires only the ordinary backoff interval.
+4. A valid recovery code can proceed after that interval has elapsed.
+5. Successful recovery-code authentication clears the shared attempt state.
+
+**Verification.** The corrected test is deterministic and does not use `sleep()`. It manipulates only the persisted timestamp used by the ordinary-backoff calculation while retaining the failed-attempt count required to verify cross-credential state sharing.
+
+**Out of scope for this fix.** This release does not modify `crypto/throttle.py`, `crypto/attempt_store.py`, `vault/store/vault_service.py`, `AttemptLimiter` defaults, passphrase or recovery-code authentication, backoff duration, lockout duration, KDF behavior, or any production application path.
+
+### Notes
+
+- This release does not remediate a security vulnerability.
+- The authentication controls introduced in 1.3.7 behaved correctly throughout both CI failures.
+- The repeated refusal provides additional evidence that passphrase and recovery-code authentication consult the same persisted limiter state.
+- Version 1.3.8's diagnosis was correct, but its field-level correction was incomplete; this release supersedes that attempted correction.
+- No stored Vault, identity, keyring, biometric-template, attachment, package, or custody-chain format changed.
+- No migration is required. Data written by earlier LTS-2028 releases loads unchanged.
+- No new external dependencies were introduced. The project remains pure Python and standard-library only, consistent with the LTS-2028 dependency-free guarantee.
+
 ## [1.3.8] - 2026-09-12 — LTS-2028 Test-Correctness Update
+
+> **Correction notice, superseded by 1.3.9:** The test correction described in this entry was incomplete and did not resolve the slow-suite failure. Version 1.3.8 correctly diagnosed the failure as a regression-test defect rather than a production throttling defect, but it attempted to expire the ordinary one-second backoff by setting `locked_until` to `0.0`.
+>
+> `locked_until` represents the full lockout imposed after the maximum failed-attempt threshold is reached. Ordinary exponential backoff is calculated from `failed_attempts` and `last_failure_at`. Because the test preserved the recent `last_failure_at` value, the recovery-code attempt remained subject to the legitimate one-second backoff and was correctly refused again. Version 1.3.9 corrects the test by preserving `failed_attempts` while moving `last_failure_at` sufficiently into the past. No production application or security behavior was defective in either 1.3.7 or 1.3.8. See `LTS-2028-COR-2`.
 
 A test-correctness release following the 1.3.7 authentication-throttling work. No shipped security behavior changed. This release corrects a regression test whose expectations did not match the intended shared unlock-throttling policy introduced in 1.3.7.
 
