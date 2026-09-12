@@ -4,6 +4,137 @@ All notable changes to BrisartIdentityTools are recorded here.
 
 ---
 
+### [1.8.0] - 2026-09-12
+
+Extends `hardware/` (introduced in 1.7.0) with fingerprint-scanner
+support and brings `hardware/cameras/onvif_camera.py` onto the same
+architectural rule the rest of the subsystem already follows. Every
+existing subsystem (Vault, Biometrics, Packages, Crypto) remains
+untouched: nothing in `hardware/` is imported by, or wired into, any of
+them. No stored vault, identity, keyring, biometric-template, attachment,
+package, or custody-chain format changed. There is no data migration.
+
+As with 1.7.0, this remains **main-only and excluded from LTS-2028 by
+policy**.
+
+**Supersedes part of 1.7.0's description**, not its shipped code: 1.7.0
+described `onvif_camera.py` as connecting "all the way to the camera
+itself rather than deferring to a caller-supplied binding," reasoning
+that ONVIF has no OS-proprietary layer forcing a split the way PC/SC
+does. That reasoning was correct, but this release changes the decision
+it led to: `onvif_camera.py` is now split behind a transport contract
+**for consistency with the rest of `hardware/`**, not because a
+proprietary wall requires it. See `hardware/README.md`'s "Why ONVIF is
+split the same way despite having no proprietary wall" for the full
+reasoning. This is a breaking change to `ONVIFCamera.__init__`'s
+signature — see **Changed** below.
+
+#### Added
+- **`hardware/base/onvif_transport.py`**: `ONVIFTransport`, an abstract
+  two-method contract (`post`, `get`) for the one operation this project
+  deliberately does not implement for cameras — opening a network
+  connection and exchanging bytes with the camera itself. Mirrors the
+  same boundary `pcsc_binding.py` already draws for smart-card readers.
+  This project ships the contract only.
+- **`hardware/base/biometric_binding.py`**: `BiometricBinding`, an
+  abstract six-method contract (`open_session`, `close_session`,
+  `list_devices`, `open_device`, `close_device`, `capture`) for the one
+  operation this project deliberately does not implement for
+  fingerprint scanners — the raw call into an OS-owned biometric
+  framework (the Windows Biometric Framework/WinBio, `libfprint`/
+  `fprintd` on Linux) or a vendor SDK where no OS-level framework
+  exists. Unlike ONVIF, there is no open wire protocol here to fall
+  back on; every real capture path goes through one of these. This
+  project ships the contract only.
+- **`hardware/biometric/fingerprint_scanner.py`**: a `BiometricBase`
+  driver for any fingerprint scanner reachable through an
+  organization-supplied `BiometricBinding`. Contains 100% of the logic
+  this project can implement in pure Python — device-name matching,
+  retry policy, and strict shape validation of a capture result
+  (`{"width": int, "height": int, "pixels": bytes}`, flat 8-bit
+  grayscale, `len(pixels) == width * height`, matching the same buffer
+  convention `biometrics/codecs/image_tools.py` already uses) — with
+  zero third-party packages and zero OS/SDK calls of its own. The
+  constructor requires a caller-supplied `BiometricBinding` instance and
+  raises `TypeError` immediately if one is not provided. A malformed
+  capture result from a binding is rejected with a specific
+  `DeviceConnectionError` at this boundary rather than passed downstream
+  silently corrupt; "no finger presented" raises the new
+  `FingerNotPresentError` rather than returning `None` or a blank
+  buffer.
+
+#### Changed
+- **`hardware/cameras/onvif_camera.py`: `ONVIFCamera.__init__` now
+  requires a `transport` argument (breaking change).** Previously:
+  `ONVIFCamera(host, username, password, port=...)`, using
+  `urllib.request` directly. Now:
+  `ONVIFCamera(transport, host, username, password, port=...)`,
+  raising `TypeError` immediately if `transport` is not an
+  `ONVIFTransport` instance. All SOAP construction, WS-Security digest
+  generation, and XML parsing are unchanged; only the two operations
+  that touch the network (`post` for SOAP calls, `get` for the
+  snapshot fetch) now go through `self._transport` instead of
+  `urllib.request.urlopen()` directly. This file's import list no
+  longer includes `urllib.request`. Existing code constructing
+  `ONVIFCamera` must be updated to supply an `ONVIFTransport`
+  implementation; see `hardware/README.md`, "Writing your own binding,
+  transport, or driver."
+- **`hardware/hardware_manager.py`: `HardwareManager.create_device()`
+  now accepts and forwards arguments.** Previously:
+  `create_device(self, device_name: str)`. Now:
+  `create_device(self, device_name: str, *args, **kwargs)`, forwarding
+  directly to the registered class's constructor. This was necessary
+  because `PCSCReader`, `ONVIFCamera`, and `FingerprintScanner` all now
+  require a binding/transport argument at construction — without this
+  change, `HardwareManager` could only construct the zero-argument
+  placeholder drivers. `HardwareManager` still never imports,
+  constructs, or knows about any concrete binding/transport
+  implementation.
+- **`hardware/README.md`: rewritten to describe all three device
+  categories under one consistent rule** ("Brisart owns protocol and
+  logic; the organization deploying this software owns the literal
+  connection to the outside world") instead of describing PC/SC and
+  ONVIF under two different postures. Includes a new section
+  explaining why ONVIF is held to the same rule despite having no
+  OS-proprietary wall forcing it, updated dependency-status entries for
+  `fingerprint_scanner.py`, and a `HardwareManager` usage example
+  showing how a binding/transport is passed through
+  `create_device(name, *args, **kwargs)`.
+
+#### Notes
+- **Dependency accounting, precisely stated, across all three real
+  drivers:** `onvif_camera.py`, `pcsc_reader.py`, and
+  `fingerprint_scanner.py` each import only the Python standard library
+  or other `hardware/*` modules. No PyPI package, no vendored
+  third-party source, and no license notice obligation is introduced
+  anywhere in this subsystem.
+- **The architecture is now uniform, not applied only where a wall
+  forces it.** PC/SC and biometric scanners have a genuine
+  OS-proprietary or vendor-SDK wall with no way around it on any
+  platform; ONVIF does not, and is still split behind a transport
+  contract by deliberate consistency choice. All three device
+  categories in `hardware/` now follow one rule.
+- Every one of the three real drivers' constructors requires its
+  binding/transport object and raises `TypeError` immediately if it is
+  missing or the wrong type — there is no default, no silent fallback,
+  and no partially-working mode for any of them.
+- None of `onvif_camera.py`, `pcsc_reader.py`, or
+  `fingerprint_scanner.py` has been validated against physical hardware
+  as part of this repository's own test suite. All three are correct
+  against their documented protocol/contract; real-world calibration
+  against specific vendor firmware and a specific organization's
+  binding/transport implementation is open, in the same spirit as
+  `docs/KNOWN_ISSUES.md`'s KI-001.
+- No new external dependencies were introduced anywhere in this
+  project. The standing caveats are unchanged and still apply in full:
+  BSR2 is unreviewed research cryptography (see
+  `docs/BSR2_INTEGRATION.md`), the package custody chain is
+  tamper-evident rather than a digital signature, and the video
+  liveness gate remains a motion-presence check rather than general
+  anti-spoofing (KI-001).
+
+---
+
 ### [1.7.0] - 2026-09-12
 
 Introduces `hardware/`, an optional device-integration layer for physical

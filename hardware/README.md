@@ -13,31 +13,33 @@ entirely absent from a checkout.
 ```text
 hardware/
 ├── base/
-│   ├── device_base.py       DeviceBase -- name/connect/disconnect/health_check
-│   ├── camera_base.py       CameraBase(DeviceBase) + capture_image()
-│   ├── biometric_base.py    BiometricBase(DeviceBase) + scan()
-│   ├── reader_base.py       ReaderBase(DeviceBase) + read_card()
-│   └── pcsc_binding.py      PCSCBinding -- contract only, no implementation
-├── registry.py               Plain dict: name -> driver class
-├── hardware_manager.py       HardwareManager.create_device(name)
-├── exceptions.py             HardwareError and subclasses
+│   ├── device_base.py         DeviceBase -- name/connect/disconnect/health_check
+│   ├── camera_base.py         CameraBase(DeviceBase) + capture_image()
+│   ├── biometric_base.py      BiometricBase(DeviceBase) + scan()
+│   ├── reader_base.py         ReaderBase(DeviceBase) + read_card()
+│   ├── pcsc_binding.py        PCSCBinding -- contract only, no implementation
+│   ├── onvif_transport.py     ONVIFTransport -- contract only, no implementation
+│   └── biometric_binding.py   BiometricBinding -- contract only, no implementation
+├── registry.py                 Plain dict: name -> driver class
+├── hardware_manager.py         HardwareManager.create_device(name, *args, **kwargs)
+├── exceptions.py               HardwareError and subclasses
 ├── cameras/
 │   ├── placeholder_camera.py
-│   └── onvif_camera.py       Real driver -- 100% standard library
+│   └── onvif_camera.py         Real driver -- pure Python, requires a
+│                                caller-supplied ONVIFTransport (see below)
 ├── card_readers/
 │   ├── placeholder_reader.py
-│   └── pcsc_reader.py        Real driver -- pure Python, requires a
-│                              caller-supplied PCSCBinding (see below)
+│   └── pcsc_reader.py          Real driver -- pure Python, requires a
+│                                caller-supplied PCSCBinding (see below)
 ├── biometric/
-│   └── placeholder_biometric.py
-└── drivers/                  Reserved for future low-level drivers
+│   ├── placeholder_biometric.py
+│   └── fingerprint_scanner.py  Real driver -- pure Python, requires a
+│                                caller-supplied BiometricBinding (see below)
+└── drivers/                    Reserved for future low-level drivers
 ```
 
 A shared conformance suite (`hardware/tests/test_device_contract.py`)
-does not exist in this repository yet. Adding one — verifying every
-driver actually satisfies `DeviceBase`/`CameraBase`/`ReaderBase`, rather
-than trusting the right method names exist — is open, tracked work, not
-something currently shipped.
+does not exist in this repository yet. Adding one is open, tracked work.
 
 ## The contract
 
@@ -54,52 +56,90 @@ class DeviceBase(ABC):
 Plus exactly one modality-specific method: `CameraBase.capture_image()`,
 `BiometricBase.scan()`, or `ReaderBase.read_card()`.
 
-## Dependency status, per driver
+## The one rule every real driver in this project follows
+
+**Brisart owns protocol and logic. The organization deploying this
+software owns the literal connection to the outside world.** Every real
+driver in `hardware/` is split into two files along that exact line:
+
+| Subsystem | Brisart-owned (protocol/logic, pure Python) | Organization-owned (the actual connection) |
+|---|---|---|
+| Cameras | `cameras/onvif_camera.py` | an `ONVIFTransport` implementation you supply |
+| Card readers | `card_readers/pcsc_reader.py` | a `PCSCBinding` implementation you supply |
+| Biometrics | `biometric/fingerprint_scanner.py` | a `BiometricBinding` implementation you supply |
+
+In all three cases:
+
+- The Brisart-owned file contains 100% of the protocol logic (SOAP/XML
+  construction and parsing, APDU construction and status-word checking,
+  device-name matching, retry policy, result-shape validation) and
+  makes **zero network calls, zero OS calls, and imports zero
+  third-party packages.**
+- The driver's constructor **requires** the binding/transport object as
+  an argument and raises `TypeError` immediately if it is missing or
+  the wrong type. There is no default, no silent fallback, and no
+  partially-working mode.
+- The organization deploying BrisartIdentityTools is the party that
+  actually opens a socket, makes an HTTP request, or calls into an
+  OS-level library (`winscard.dll`, `PCSC.framework`, `libpcsclite`,
+  the Windows Biometric Framework, `libfprint`/`fprintd`, or a vendor
+  SDK). **This project never makes that connection itself, for any of
+  the three device categories.**
+
+This is true even for ONVIF, which -- unlike PC/SC and biometric
+scanners -- has no OS-proprietary layer standing in the way (see "Why
+ONVIF is split the same way despite having no proprietary wall" below).
+The architecture is intentionally uniform across all three subsystems
+rather than only where a proprietary wall forces it.
+
+## Why the OS binding/transport is not shipped, per subsystem
 
 ```text
-placeholder_*.py    -- zero dependencies, reference implementations only
-onvif_camera.py     -- ZERO third-party packages. Implemented entirely
-                        with the standard library (urllib, xml.etree,
-                        hashlib). No OS-proprietary layer applies to
-                        ONVIF -- it is XML over HTTP, which stdlib
-                        already handles completely.
-pcsc_reader.py       -- ZERO third-party packages, ZERO OS calls of its
-                        own. Contains all PC/SC logic (reader matching,
-                        retries, APDU construction, status-word
-                        checking) in pure Python. Requires a
-                        PCSCBinding instance supplied by the caller --
-                        see "Why the OS binding is not shipped" below.
-```
-
-## Why the OS binding is not shipped (PC/SC specifically)
-
-ONVIF and PC/SC hit a genuinely different wall:
-
-```text
-ONVIF (cameras):
-    Network protocol (XML/SOAP over HTTP/TCP sockets)
-    → sockets are a universal, OS-neutral standard library facility
-    → nothing OS-proprietary to reach; stdlib goes all the way
-
 PC/SC (card readers):
     Requires a call into the OS's OWN smart-card service:
         winscard.dll    (Windows -- closed source, part of the OS)
         PCSC.framework  (macOS -- closed source, part of the OS)
         libpcsclite     (Linux -- BSD licensed, part of the OS)
-    → there is no stdlib path to a smart card reader on any platform
-      that skips this OS-level service; every PC/SC application
-      (including Windows' own built-in smart card support) goes
-      through it
+    -> no application on any platform reaches a smart-card reader
+       without going through this layer.
+
+Biometric scanners:
+    Requires a call into an OS-owned biometric framework or a vendor
+    SDK:
+        Windows Biometric Framework / WinBio  (Windows, closed source)
+        libfprint + fprintd                    (Linux, open source, but
+                                                 still a real library wall)
+        a vendor SDK                           (where no OS framework
+                                                 exists at all)
+    -> no application reaches a real fingerprint scanner without going
+       through one of these.
+
+ONVIF (cameras):
+    Has NO equivalent OS-proprietary wall. ONVIF is XML/SOAP over a
+    plain HTTP socket, which Python's standard library already speaks
+    completely (urllib, xml.etree.ElementTree, hashlib, base64). There
+    is no proprietary code standing between this project and a camera.
 ```
 
-Rather than have `hardware/card_readers/pcsc_reader.py` itself decide
-which platform it's on and load an OS-owned library, this project draws
-the line one step earlier: `pcsc_reader.py` contains 100% of the *logic*
-(pure Python, fully unit-testable with a fake binding, zero OS calls),
-and `hardware/base/pcsc_binding.py` defines the five-method contract for
-the one remaining piece — actually talking to the OS. Implementing that
-contract, for the specific OS(es) a deployment actually runs on, is the
-responsibility of the organization deploying BrisartIdentityTools:
+## Why ONVIF is split the same way despite having no proprietary wall
+
+Because PC/SC and biometric scanners *require* stopping at a
+binding/transport boundary, and this project wants one consistent rule
+across all three device categories rather than a different posture per
+subsystem, `onvif_camera.py` is split identically even though nothing
+proprietary forced it: **BrisartIdentityTools never opens a network
+connection to a camera itself.** An organization deploying this
+software supplies an `ONVIFTransport` implementation -- built on
+`urllib`, an internal proxy-aware HTTP client, a camera gateway, or
+whatever mechanism fits their network policy -- and that implementation
+is what actually reaches the camera. `onvif_camera.py` owns every line
+of SOAP generation, WS-Security digest computation, and XML parsing,
+and calls `self._transport.post(...)` / `self._transport.get(...)`
+instead of `urllib.request.urlopen(...)` directly.
+
+## Writing your own binding, transport, or driver
+
+Each contract is a small, fixed set of methods. For example, PC/SC:
 
 ```python
 from hardware.base.pcsc_binding import PCSCBinding
@@ -120,34 +160,66 @@ from hardware.card_readers.pcsc_reader import PCSCReader
 reader = PCSCReader(binding=MyPCSCBinding())
 ```
 
-This means: no lab that only uses ONVIF cameras ever needs to write or
-audit any OS-calling code at all. A lab that wants PC/SC card readers
-writes (or audits) exactly one small file — their own `PCSCBinding` —
-scoped to the one OS they actually run, rather than inheriting a
-generic, multi-platform OS-calling layer they didn't write and may not
-need in its entirety.
+The same pattern applies to `ONVIFTransport` (see
+`hardware/base/onvif_transport.py`) and `BiometricBinding` (see
+`hardware/base/biometric_binding.py`). A lab that wants a vendor-specific
+driver not covered here at all does not need to touch `hardware/base/`,
+`registry.py`, or anything outside one new file — same pattern as any
+`CameraBase`/`BiometricBase`/`ReaderBase` subclass always has.
 
-## Writing your own driver
+## Using HardwareManager with a real driver
 
-A lab that wants a vendor-specific driver not covered here does not need
-to touch `hardware/base/`, `registry.py`, or anything outside one new
-file — same pattern as `CameraBase`/`BiometricBase`/`ReaderBase`
-subclasses always have.
+`HardwareManager.create_device()` forwards any arguments through to the
+registered class's constructor, so a real driver's required
+binding/transport is supplied the same way as calling the class
+directly:
+
+```python
+from hardware.registry import register
+from hardware.hardware_manager import HardwareManager
+from hardware.card_readers.pcsc_reader import PCSCReader
+
+register("my-reader", PCSCReader)
+
+manager = HardwareManager()
+reader = manager.create_device("my-reader", binding=MyPCSCBinding())
+```
+
+`HardwareManager` itself never imports, constructs, or knows about any
+concrete binding/transport implementation -- it has no knowledge of
+networks, sockets, or operating-system libraries of any kind.
+
+## Dependency status, per driver
+
+```text
+placeholder_*.py         -- zero dependencies, reference implementations only
+onvif_camera.py           -- ZERO third-party packages, ZERO network calls
+                             of its own. All SOAP/WS-Security/XML logic in
+                             pure Python. Requires a caller-supplied
+                             ONVIFTransport.
+pcsc_reader.py             -- ZERO third-party packages, ZERO OS calls of
+                             its own. All APDU/status-word logic in pure
+                             Python. Requires a caller-supplied PCSCBinding.
+fingerprint_scanner.py     -- ZERO third-party packages, ZERO OS/SDK calls
+                             of its own. All device-matching/retry/
+                             shape-validation logic in pure Python.
+                             Requires a caller-supplied BiometricBinding.
+```
 
 ## Testing
 
 No `hardware/tests/` suite currently exists in this repository. When
-added, `onvif_camera.py` is fully testable with zero dependencies and
-zero real hardware (it is pure stdlib), and `pcsc_reader.py`'s logic —
-retry policy, APDU construction, status-word checking — is fully
-testable against a minimal fake `PCSCBinding`, with no real OS call and
-no real hardware required.
+added: `onvif_camera.py`, `pcsc_reader.py`, and `fingerprint_scanner.py`
+are all fully testable against a minimal fake transport/binding, with
+zero real network access, zero real OS calls, and zero real hardware
+required for any of the three.
 
 ## Status
 
-`onvif_camera.py` is a complete, dependency-free ONVIF client but has
-not been validated against physical camera hardware as part of this
-repository's own test suite. `pcsc_reader.py`'s logic layer is fully
-testable in isolation; its correctness against a *real* PC/SC binding
-depends entirely on the quality of the binding an operator supplies,
-which is intentionally outside this repository's scope.
+None of the three real drivers (`onvif_camera.py`, `pcsc_reader.py`,
+`fingerprint_scanner.py`) has been validated against a physical device
+as part of this repository's own test suite. Each is correct against
+its documented protocol/contract; real-world validation against a
+specific vendor's hardware and a specific organization's
+binding/transport implementation is open, in the same spirit as
+`docs/KNOWN_ISSUES.md`'s KI-001.
